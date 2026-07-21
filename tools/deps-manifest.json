@@ -1,0 +1,18 @@
+{
+  "dependencies": [
+    {
+      "name": "nuclei-gcc-toolchain",
+      "executable": "riscv-nuclei-elf-gcc.exe",
+      "env": [
+        "NUCLEI_GCC_BIN",
+        "RISCV_NUCLEI_GCC_BIN",
+        "RISCV_TOOLCHAIN_BIN"
+      ],
+      "source": {
+        "type": "manual",
+        "manual_url": "https://download.nucleisys.com/upload/files/toolchain/gcc/nuclei_riscv_newlibc_prebuilt_win32_2020.08.zip",
+        "description": "Install the verified Nuclei RISC-V Embedded Toolchain for Windows from Nuclei's official download server, tested with Nuclei GCC 2020.08 / GCC 9.2.0, then set NUCLEI_GCC_BIN, RISCV_NUCLEI_GCC_BIN, RISCV_TOOLCHAIN_BIN, or PATH to the directory containing riscv-nuclei-elf-gcc.exe. Newer GCC 14.x toolchains are not compatible with the current binary SDK library."
+      }
+    }
+  ]
+}

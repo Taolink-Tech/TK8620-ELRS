@@ -1,0 +1,131 @@
+#include <string.h>
+#include "SerialIO.h"
+#include "SerialCRSF.h"
+#include "SerialSBUS.h"
+#include "helpers.h"
+#include "logging.h"
+#include "tk86xx_api.h"
+
+extern SerialIO_t serialIO;
+static volatile uint16_t s_rx_wr = 0;
+static volatile uint16_t s_rx_rd = 0;
+static uint8_t sRxDataBuf[defaultMaxSerialWriteSize];
+
+/* UART RX callback: cache bytes into the ring buffer only. */
+RAMCODE_SECTION void SerialIO_UartRxCallback(uint8_t *data, uint8_t len)
+{
+    for (uint8_t i = 0; i < len; i++) {
+        uint16_t next = (uint16_t)((s_rx_wr + 1) % defaultMaxSerialWriteSize);
+        if (next == s_rx_rd) {
+            /* Drop the oldest byte when the ring buffer overflows. */
+            s_rx_rd = (uint16_t)((s_rx_rd + 1) % defaultMaxSerialWriteSize);
+        }
+        sRxDataBuf[s_rx_wr] = data[i];
+        s_rx_wr = next;
+    }
+}
+
+static int SerialIO_getMaxSerialWriteSize(void)
+{
+    return defaultMaxSerialWriteSize;
+}
+
+static int SerialIO_getMaxSerialReadSize(void)
+{
+    return defaultMaxSerialReadSize;
+}
+
+static uint16_t readBytes(uint8_t *dest, uint16_t maxlen)
+{
+    uint16_t rd;
+    uint16_t wr;
+    uint16_t available;
+    uint16_t toCopy;
+    uint16_t firstChunk;
+
+    if (maxlen == 0 || dest == NULL)
+        return 0;
+
+    rd = (uint16_t)s_rx_rd;
+    wr = (uint16_t)s_rx_wr;
+    if (wr >= rd) {
+        available = (uint16_t)(wr - rd);
+    } else {
+        available = (uint16_t)(defaultMaxSerialWriteSize - rd + wr);
+    }
+
+    toCopy = (maxlen < available) ? maxlen : available;
+    if (toCopy == 0) {
+        return 0;
+    }
+
+    firstChunk = (toCopy <= (uint16_t)(defaultMaxSerialWriteSize - rd)) ? toCopy : (uint16_t)(defaultMaxSerialWriteSize - rd);
+    if (firstChunk > 0) {
+        memcpy(dest, &sRxDataBuf[rd], firstChunk);
+    }
+    if (toCopy > firstChunk) {
+        memcpy(dest + firstChunk, sRxDataBuf, toCopy - firstChunk);
+    }
+
+    s_rx_rd = (uint16_t)((rd + toCopy) % defaultMaxSerialWriteSize);
+
+    return toCopy;
+}
+
+static void SerialIO_processSerialInput(void)
+{
+    uint8_t buffer[defaultMaxSerialReadSize];
+    uint8_t size = readBytes(buffer, defaultMaxSerialReadSize);
+    serialIO.processBytes(buffer, size);
+}
+
+static void SerialIO_sendQueuedData(uint32_t maxBytesToSend)
+{
+    uint32_t bytesWritten = 0;
+
+    while (size(&serialIO._fifo) > peek(&serialIO._fifo) && (bytesWritten + peek(&serialIO._fifo)) < maxBytesToSend)
+    {
+        uint8_t outPktLen = pop(&serialIO._fifo);
+        uint8_t outData[defaultMaxSerialWriteSize];
+        popBytes(&serialIO._fifo, outData, outPktLen);
+        Tk86xxSerialWrite(outData, outPktLen);
+        bytesWritten += outPktLen;
+    }
+}
+
+void SerialIO_Init(SerialIO_t *const serialIO)
+{
+    serialIO->processSerialInput = SerialIO_processSerialInput;
+    serialIO->sendQueuedData = SerialIO_sendQueuedData;
+    serialIO->getMaxSerialWriteSize = SerialIO_getMaxSerialWriteSize;
+    serialIO->getMaxSerialReadSize = SerialIO_getMaxSerialReadSize;
+    serialIO->sendRCFrame = SerialCRSF_SendRCFrame;
+    serialIO->processBytes = SerialCRSF_processBytes;
+    serialIO->queueMSPFrameTransmission = SerialCRSF_queueMSPFrameTransmission;
+}
+
+void SerialIO_SetProtocol(SerialIO_t *serialIO, eSerialProtocol_e protocol)
+{
+    if (serialIO == NULL)
+        return;
+
+    switch (protocol)
+    {
+    case PROTOCOL_SBUS:
+    case PROTOCOL_INVERTED_SBUS:
+        serialIO->sendRCFrame = SerialSBUS_SendRCFrame;
+        serialIO->processBytes = SerialSBUS_processBytes;
+        serialIO->queueMSPFrameTransmission = SerialSBUS_queueMSPFrameTransmission;
+        serialIO->sendQueuedData = SerialIO_sendQueuedData;
+        break;
+
+    case PROTOCOL_CRSF:
+    case PROTOCOL_INVERTED_CRSF:
+    default:
+        serialIO->sendRCFrame = SerialCRSF_SendRCFrame;
+        serialIO->processBytes = SerialCRSF_processBytes;
+        serialIO->queueMSPFrameTransmission = SerialCRSF_queueMSPFrameTransmission;
+        serialIO->sendQueuedData = SerialIO_sendQueuedData;
+        break;
+    }
+}
