@@ -7,8 +7,6 @@ param(
     [string]$RxVersion,
     [int]$Freq = 900320000,
     [string]$TargetId,
-    [switch]$NoReset,
-    [switch]$SendReset,
     [switch]$KeepUserParams,
     [switch]$VerboseLog,
     [switch]$DryRun,
@@ -22,7 +20,7 @@ $ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 
-$validModes = @("tx", "rx-stash", "help")
+$validModes = @("tx", "rx", "rx-stash", "help")
 if ($Mode -notin $validModes) {
     Write-Host "Unknown mode: $Mode" -ForegroundColor Red
     Write-Host "Valid modes: tx, rx-stash, help"
@@ -49,20 +47,6 @@ if ($Mode -eq "help") {
     Write-Host "  .\build.cmd tx"
     Write-Host "  .\build.cmd rx"
     exit 0
-}
-
-function Resolve-Python {
-    $py = Get-Command py -ErrorAction SilentlyContinue
-    if ($py) {
-        return @("py", "-3")
-    }
-
-    $python = Get-Command python -ErrorAction SilentlyContinue
-    if ($python) {
-        return @("python")
-    }
-
-    throw "Python was not found. Restore tools\burn\tk8620_bootrom.exe or install Python 3 with pyserial for the source fallback."
 }
 
 function Resolve-RequiredFile {
@@ -154,11 +138,18 @@ function Select-SerialPort {
 $defaultBootloader = Join-Path $Root "firmware\bootloader\TK8620_B_V2.0.2.hex"
 $defaultTxFirmware = Join-Path $Root "build\ELRS_Tx\TK8620_ELRS_TX_P.hex"
 $defaultRxFirmware = Join-Path $Root "build\ELRS_Rx\TK8620_ELRS_RX_P.hex"
-$burnToolExe = Join-Path $Root "tools\burn\tk8620_bootrom.exe"
-$burnToolScript = Join-Path $Root "tools\burn\tk8620_bootrom.py"
+$burnToolExe = Join-Path $Root "tools\burn\tk8620_flasher.exe"
 
-$isLocalBurn = $Mode -eq "tx"
+$isLocalBurn = $Mode -eq "tx" -or $Mode -eq "rx"
+$isTxBurn = $Mode -eq "tx"
 $isRxStash = $Mode -eq "rx-stash"
+
+if (-not (Test-Path -LiteralPath $burnToolExe)) {
+    Write-Host "Flasher executable not found." -ForegroundColor Red
+    Write-Host "  expected: $burnToolExe"
+    Write-Host "Restore it from the release package, or run tools\package-flasher.cmd to rebuild it."
+    exit 1
+}
 
 if (-not $isRxStash) {
     if ($PSBoundParameters.ContainsKey("RxVersion")) {
@@ -184,7 +175,12 @@ $firmwarePath = $null
 if ($isLocalBurn) {
     $bootloaderPath = Resolve-RequiredFile -Path $defaultBootloader -Label "Bootloader" -Hint "Keep firmware\bootloader\TK8620_B_V2.0.2.hex in the repository."
 
-    $firmwarePath = Resolve-RequiredFile -Path $defaultTxFirmware -Label "TX firmware" -Hint "Run .\build.cmd tx before flashing."
+    if ($isTxBurn) {
+        $firmwarePath = Resolve-RequiredFile -Path $defaultTxFirmware -Label "TX firmware" -Hint "Run .\build.cmd tx before flashing."
+    }
+    else {
+        $firmwarePath = Resolve-RequiredFile -Path $defaultRxFirmware -Label "RX firmware" -Hint "Run .\build.cmd rx before flashing."
+    }
 }
 else {
     $firmwarePath = Resolve-RequiredFile -Path $defaultRxFirmware -Label "RX stash firmware" -Hint "Run .\build.cmd rx before staging an RX wireless update."
@@ -192,11 +188,15 @@ else {
 
 $targetPort = Select-SerialPort -RequestedPort $Port
 if ($isLocalBurn) {
-    Write-Host "Bootloader: $bootloaderPath"
-    Write-Host ("{0} firmware: {1}" -f $Mode.ToUpper(), $firmwarePath)
+    if ($VerboseLog) {
+        Write-Host "Bootloader: $bootloaderPath"
+        Write-Host ("{0} firmware: {1}" -f $Mode.ToUpper(), $firmwarePath)
+    }
 }
 else {
-    Write-Host "Rx stash firmware: $firmwarePath"
+    if ($VerboseLog) {
+        Write-Host "Rx stash firmware: $firmwarePath"
+    }
 }
 Write-Host "Port: $targetPort"
 
@@ -218,9 +218,6 @@ else {
     }
 }
 
-if ($NoReset -or -not $SendReset) {
-    $args += "--no-reset"
-}
 if ($KeepUserParams) {
     $args += "--keep-user-params"
 }
@@ -231,29 +228,7 @@ if ($DryRun) {
     $args += "--dry-run"
 }
 
-if (Test-Path -LiteralPath $burnToolExe) {
-    & $burnToolExe @args
-    if ($LASTEXITCODE -ne 0) {
-        exit $LASTEXITCODE
-    }
-    exit 0
-}
-
-if (-not (Test-Path -LiteralPath $burnToolScript)) {
-    throw "Burn tool not found. Expected $burnToolExe or $burnToolScript."
-}
-
-Write-Host "Bundled burn executable not found; falling back to Python source."
-$python = Resolve-Python
-$pythonExe = $python[0]
-$pythonArgs = @()
-if ($python.Count -gt 1) {
-    $pythonArgs += $python[1..($python.Count - 1)]
-}
-$pythonArgs += @($burnToolScript)
-$pythonArgs += $args
-
-& $pythonExe @pythonArgs
+& $burnToolExe @args
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }

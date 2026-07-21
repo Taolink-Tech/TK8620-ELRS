@@ -538,67 +538,6 @@ function Build-Project {
     Write-Step "[DONE] $hex"
 }
 
-function New-FirmwareManifest {
-    param(
-        [string]$Root,
-        [string]$BuildRoot,
-        [pscustomobject]$VersionInfo
-    )
-
-    $artifactPatterns = @('*.hex', '*.bin', '*.elf', '*.map', '*.lst', '*.ram')
-    $artifacts = @()
-
-    foreach ($projectDir in Get-ChildItem -Path $BuildRoot -Directory -ErrorAction SilentlyContinue) {
-        foreach ($pattern in $artifactPatterns) {
-            $artifacts += Get-ChildItem -Path $projectDir.FullName -File -Filter $pattern -ErrorAction SilentlyContinue |
-                Sort-Object FullName |
-                ForEach-Object {
-                    [pscustomobject]@{
-                        path   = Get-RelativePathCompat -BasePath $Root -TargetPath $_.FullName
-                        size   = $_.Length
-                        sha256 = (Get-FileHash -Algorithm SHA256 -Path $_.FullName).Hash.ToLowerInvariant()
-                    }
-                }
-        }
-    }
-
-    $bootloaderDir = Join-Path $Root 'firmware\bootloader'
-    $bootloaders = @()
-    if (Test-Path $bootloaderDir) {
-        $bootloaders = @(Get-ChildItem -Path $bootloaderDir -Recurse -File -Include *.hex,*.bin |
-            Sort-Object FullName |
-            ForEach-Object {
-                [pscustomobject]@{
-                    path   = Get-RelativePathCompat -BasePath $Root -TargetPath $_.FullName
-                    size   = $_.Length
-                    sha256 = (Get-FileHash -Algorithm SHA256 -Path $_.FullName).Hash.ToLowerInvariant()
-                }
-            })
-    }
-
-    $manifest = [ordered]@{
-        schema               = 1
-        project              = 'TK8620 ELRS'
-        version              = $VersionInfo.Version
-        version_source       = $VersionInfo.Source
-        git_commit           = $VersionInfo.Commit
-        git_dirty            = $VersionInfo.Dirty
-        upstream             = [ordered]@{
-            name    = 'ExpressLRS'
-            version = '3.5.6'
-            commit  = 'ee188b4efb9a707f682e8b2d966cd670de92ab50'
-        }
-        build_timestamp_utc  = $VersionInfo.Timestamp
-        firmware_version     = "$($VersionInfo.Version)-tk8620 elrs-3.5.6 $($VersionInfo.Commit)$(if ($VersionInfo.Dirty) { '-dirty' } else { '' })"
-        artifacts            = @($artifacts)
-        bootloaders          = $bootloaders
-    }
-
-    $manifestPath = Join-Path $BuildRoot 'firmware-manifest.json'
-    $manifest | ConvertTo-Json -Depth 6 | Set-Content -Path $manifestPath -Encoding UTF8
-    Write-Step "[MANIFEST] $manifestPath"
-}
-
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $sdkRoot = Join-Path $root 'open-sdk'
 $toolsRoot = Join-Path $root 'tools'
@@ -662,4 +601,3 @@ if ($Target -in @('all', 'tx')) {
     Build-Project -Root $root -Project (Get-ProjectConfig -Root $root -Kind 'tx') -Toolchain $toolchain -SdkRoot $sdkRoot -ToolsRoot $toolsRoot -BuildProfile $BuildProfile -RssiCompDb $RssiCompDb
 }
 
-New-FirmwareManifest -Root $root -BuildRoot $buildRoot -VersionInfo $versionInfo

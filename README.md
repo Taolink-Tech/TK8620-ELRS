@@ -36,10 +36,6 @@ riscv-nuclei-elf-gcc.exe --version
 
 The expected compiler is GCC `9.2.0`.
 
-Newer GCC 14.x toolchains, including Nuclei 2025.10 packages using
-`riscv64-unknown-elf-gcc.exe`, are not compatible with the current
-`open-sdk/lib/libtk86xx.a` binary SDK library.
-
 ## Build
 
 Open PowerShell in this directory.
@@ -72,7 +68,6 @@ Build output is written to:
 
 - `build/ELRS_Rx/TK8620_ELRS_RX_P.hex`
 - `build/ELRS_Tx/TK8620_ELRS_TX_P.hex`
-- `build/firmware-manifest.json`
 
 ## Flash TX
 
@@ -88,8 +83,7 @@ Connect the TX module UART through a USB-to-UART adapter, then run:
 .\burn.cmd tx
 ```
 
-The script lists detected COM ports and asks you to select one. Press the TX
-module reset key when prompted.
+The script lists detected COM ports and asks you to select the target port.
 
 ## Stage RX Firmware For Wireless Update
 
@@ -119,6 +113,7 @@ power-cycle the RX module after the update completes.
 - `applications/ELRS_Tx/`: TX application source
 - `applications/ELRS_Rx/`: RX application source
 - `applications/ELRS_Common/`: shared application source
+- `hardware/`: hardware design files, manufacturing outputs, and board notes
 - `open-sdk/include/`: public TK8620 SDK headers
 - `open-sdk/lib/libtk86xx.a`: TK8620 binary SDK library
 - `firmware/bootloader/`: bootloader image used by `burn.cmd`
