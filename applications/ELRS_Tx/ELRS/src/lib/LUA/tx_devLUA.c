@@ -11,6 +11,7 @@
 #include "handset.h"
 #include "logging.h"
 #include "POWERMGNT.h"
+#include "tx_power.h"
 #include "serial_port.h"
 #include "rx_ota_sender.h"
 
@@ -51,7 +52,13 @@ static const char crsfSerialBaudOpts[] = "400k;420k;921k";
 // static const char luastrHeadTrackingStart[] = STR_LUA_ALLAUX;
 static const char luastrOffOn[] = "Off;On";
 static char luastrPacketRates[] = STR_LUA_PACKETRATES;
-static char txPowerLevels[] = "0.1;1;10;25;50;100";
+// Calibrated product output power after the PA, displayed in mW.
+// Nominal 1000 mW maximum; measured product output is 30.5 dBm.
+static char txPowerLevels[] = "100;1000";
+static const PowerLevels_e txPowerOptionMap[] = {
+    TX_POWER_100mW,
+    TX_POWER_1000mW,
+};
 static int event();
 #define HAS_RADIO true
 
@@ -90,7 +97,7 @@ static luaItem_folder_t luaPowerFolder = {
 
 static luaItem_selection_t luaPower = {
     {"Max Power", CRSF_TEXT_SELECTION},
-    0, // value
+    0, // default display: 100 mW product output / 20 dBm
     txPowerLevels,
     "mW"
 };
@@ -784,8 +791,11 @@ static void ResetPower()
 static void luaparamSetPower(luaPropertiesCommon_t *item, uint8_t arg)
 {
     UNUSED(item);
-    uint8_t newPower = (uint8_t)POWERMGNT_getMinPower() + arg;
-    if (newPower > (uint8_t)POWERMGNT_getMaxPower()) newPower = (uint8_t)POWERMGNT_getMaxPower();
+    if (arg >= ARRAY_SIZE(txPowerOptionMap))
+    {
+        arg = 0;
+    }
+    uint8_t newPower = (uint8_t)txPowerOptionMap[arg];
     txConfig.SetPower(newPower);
     if (txConfig.IsModified())
     {
@@ -923,7 +933,8 @@ static int event()
   // setLuaTextSelectionValue(&luaLinkMode, txConfig.GetLinkMode());
   luadevUpdateModelID();
   setLuaTextSelectionValue(&luaModelMatch, (uint8_t)txConfig.GetModelMatch());
-  setLuaTextSelectionValue(&luaPower, (uint8_t)(txConfig.GetPower() - (uint8_t)POWERMGNT_getMinPower()));
+  setLuaTextSelectionValue(&luaPower,
+                           txConfig.GetPower() == (uint8_t)TX_POWER_1000mW ? 1U : 0U);
 //   if (GPIO_PIN_FAN_EN != UNDEF_PIN || GPIO_PIN_FAN_PWM != UNDEF_PIN)
 //   {
 //     setLuaTextSelectionValue(&luaFanThreshold, txConfig.GetPowerFanThreshold());

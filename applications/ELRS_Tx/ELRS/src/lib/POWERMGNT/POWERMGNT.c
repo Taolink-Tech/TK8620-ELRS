@@ -6,26 +6,17 @@
 #include "device.h"
 #include "helpers.h"
 #include "logging.h"
+#include "tx_power.h"
 
-#define TxDefaultPower PWR_100mW
+#define TxDefaultPower TX_POWER_100mW
 
 uint8_t powerToCrsfPower(PowerLevels_e power)
 {
-    // Crossfire uses a non-linear power enum and has no values below 10 mW.
-    // Keep the TK8620-only low-power levels explicit instead of assigning
-    // non-standard CRSF values.
+    // Report calibrated product output power, not the chip drive level.
     switch (power)
     {
-    case PWR_0p1mW: return 0;
-    case PWR_1mW: return 0;
-    case PWR_10mW: return 1;
-    case PWR_25mW: return 2;
-    case PWR_50mW: return 8;
-    case PWR_100mW: return 3;
-    case PWR_250mW: return 7;
-    case PWR_500mW: return 4;
-    case PWR_1000mW: return 5;
-    case PWR_2000mW: return 6;
+    case TX_POWER_100mW: return 3;
+    case TX_POWER_1000mW: return 5;
     default:
         return 0;
     }
@@ -35,15 +26,10 @@ PowerLevels_e crsfpowerToPower(uint8_t crsfpower)
 {
     switch (crsfpower)
     {
-    case 0: return TxDefaultPower;
-    case 1: return PWR_10mW;
-    case 2: return PWR_25mW;
-    case 3: return PWR_100mW;
-    case 4: return PWR_500mW;
-    case 5: return PWR_1000mW;
-    case 6: return PWR_2000mW;
-    case 7: return PWR_250mW;
-    case 8: return PWR_50mW;
+    case 3: return TX_POWER_100mW;
+    case 4:
+    case 5:
+    case 6: return TX_POWER_1000mW;
     default:
         return TxDefaultPower;
     }
@@ -51,11 +37,9 @@ PowerLevels_e crsfpowerToPower(uint8_t crsfpower)
 
 static POWERMGNT_t POWERMGNT = {
     .CurrentPower = TxDefaultPower,
-    .FanEnableThreshold = PWR_250mW,
-    .MinPower = PWR_1mW,
-    // TK8620 output power tops out at 20 dBm, so clamp the public power ladder
-    // to 100 mW for this target.
-    .MaxPower = PWR_100mW,
+    .FanEnableThreshold = TX_POWER_1000mW,
+    .MinPower = TX_POWER_100mW,
+    .MaxPower = TX_POWER_1000mW,
 };
 
 PowerLevels_e POWERMGNT_incPower(void)
@@ -81,18 +65,9 @@ int8_t POWERMGNT_getPowerIndBm(void)
 {
     switch (POWERMGNT.CurrentPower)
     {
-    case PWR_0p1mW: return -10;
-    case PWR_1mW: return 0;
-    case PWR_10mW: return 10;
-    case PWR_25mW: return 14;
-    case PWR_50mW: return 17;
-    case PWR_100mW: return 20;
-    case PWR_250mW: return 24;
-    case PWR_500mW: return 27;
-    case PWR_1000mW: return 30;
-    case PWR_2000mW: return 33;
-    default:
-        return 0;
+    case TX_POWER_100mW: return 5;
+    case TX_POWER_1000mW: return 20; // Product output measured at 30.5 dBm.
+    default: return 5;
     }
 }
 
@@ -145,12 +120,6 @@ PowerLevels_e POWERMGNT_currPower(void)
 PowerLevels_e POWERMGNT_getMaxPower(void)
 {
     PowerLevels_e power = POWERMGNT.MaxPower;
-#if defined(Regulatory_Domain_EU_CE_2400)
-    if (power > PWR_100mW)
-    {
-        power = PWR_100mW;
-    }
-#endif
     return power;
 }
 

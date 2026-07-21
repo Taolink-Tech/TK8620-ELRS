@@ -5,7 +5,9 @@
 #include "tk86xx_api.h"
 
 const fhss_config_t domains[] = {
-    {"GLOBAL868_926",  890300000, 910300000, 40, 897300000},
+    // Keep all hopping channels inside the TX board's 902-928 MHz SAW
+    // passband, with guard band on both filter skirts.
+    {"SAW_915",  905300000, 925300000, 40, 915300000},
 };
 
 // Our table of FHSS frequencies. Define a regulatory domain to select the correct set for your location and radio
