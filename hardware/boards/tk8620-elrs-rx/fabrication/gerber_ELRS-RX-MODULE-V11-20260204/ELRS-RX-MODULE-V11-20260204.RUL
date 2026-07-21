@@ -1,0 +1,6 @@
+DRC Rules Export File for PCB: C:\tempPCBDir\25a7c5173c10403e6ad10b8477c442e6\ELRS-RX-MODULE-V11-20260204.PcbDoc
+RuleKind=ShortCircuit|RuleName=ShortCircuit|Scope=Board|Allowed=0
+RuleKind=Clearance|RuleName=Clearance|Scope=Board|Minimum=4.00
+RuleKind=Width|RuleName=Width|Scope=Board|Minimum=5.00
+RuleKind=SolderMaskExpansion|RuleName=SolderMaskExpansion|Scope=Board|Minimum=4.00
+RuleKind=Clearance|RuleName=poly|Scope=Board|Minimum=5.91

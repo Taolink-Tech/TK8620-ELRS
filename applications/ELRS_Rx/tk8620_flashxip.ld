@@ -1,5 +1,6 @@
 /*
- * Copyright (c) 2019 Taolink Limited. All rights reserved.
+ * Copyright (c) 2019 Nuclei Limited. All rights reserved.
+ * Modifications copyright (c) Shanghai Taolink Technologies Co., Ltd.
  *
  * SPDX-License-Identifier: Apache-2.0
  *

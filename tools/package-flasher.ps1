@@ -14,6 +14,10 @@ $DistDir = Join-Path $PackageDir "dist"
 $BuildDir = Join-Path $PackageDir "build"
 $SpecDir = Join-Path $PackageDir "spec"
 $SpecFile = Join-Path $SpecDir "tk8620_flasher.spec"
+$PySerialVersion = "3.5"
+$PyInstallerVersion = "6.21.0"
+$PyInstallerHooksVersion = "2026.6"
+$FallbackSourceDateEpoch = "1767225600" # 2026-01-01T00:00:00Z
 
 function Resolve-Python {
     $py = Get-Command py -ErrorAction SilentlyContinue
@@ -62,6 +66,23 @@ function Remove-WorkspacePath {
     Remove-Item -LiteralPath $pathResolved -Recurse -Force
 }
 
+function Set-ReproducibleBuildTimestamp {
+    if ($env:SOURCE_DATE_EPOCH -match '^\d+$') {
+        return
+    }
+
+    $git = Get-Command git -ErrorAction SilentlyContinue
+    if ($git) {
+        $epoch = (& $git.Source -C $Root log -1 --format=%ct 2>$null)
+        if ($LASTEXITCODE -eq 0 -and $epoch -match '^\d+$') {
+            $env:SOURCE_DATE_EPOCH = $epoch
+            return
+        }
+    }
+
+    $env:SOURCE_DATE_EPOCH = $FallbackSourceDateEpoch
+}
+
 if (-not (Test-Path -LiteralPath $PythonScript)) {
     throw "Flasher source not found: $PythonScript"
 }
@@ -70,10 +91,19 @@ if (-not (Test-Path -LiteralPath $Bootpatch)) {
 }
 
 $python = Resolve-Python
+Set-ReproducibleBuildTimestamp
+$env:PYTHONHASHSEED = "0"
+Write-Host "Packaging with SOURCE_DATE_EPOCH=$env:SOURCE_DATE_EPOCH and PYTHONHASHSEED=$env:PYTHONHASHSEED"
 
 if (-not $SkipInstall) {
     Write-Host "Ensuring Python packaging dependencies..."
-    Invoke-Python -Python $python -Arguments @("-m", "pip", "install", "pyserial==3.5", "pyinstaller", "-q")
+    Invoke-Python -Python $python -Arguments @(
+        "-m", "pip", "install",
+        "pyserial==$PySerialVersion",
+        "pyinstaller==$PyInstallerVersion",
+        "pyinstaller-hooks-contrib==$PyInstallerHooksVersion",
+        "-q"
+    )
 }
 
 Write-Host "Building $OutputExe..."

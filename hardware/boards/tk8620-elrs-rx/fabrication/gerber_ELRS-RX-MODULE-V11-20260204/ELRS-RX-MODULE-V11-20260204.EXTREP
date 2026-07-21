@@ -1,0 +1,40 @@
+------------------------------------------------------------------------------------------
+Gerber File Extension Report For: ELRS-RX-MODULE-V11-20260204.GBR   2026/2/10  9:43:42
+------------------------------------------------------------------------------------------
+
+
+------------------------------------------------------------------------------------------
+Layer Extension     Layer Description                      
+------------------------------------------------------------------------------------------
+.GTO                Top Overlay                             
+.GTP                Top Paste                               
+.GTS                Top Solder                              
+.GTL                TOP                                     
+.G1                 L2                                      
+.G2                 L3                                      
+.GBL                BOTTOM                                  
+.GBS                Bottom Solder                           
+.GBP                Bottom Paste                            
+.GBO                Bottom Overlay                          
+.GM2                DIMENSION                               
+.GM7                PLACE_BOUND_TOP                         
+.GM8                PLACE_BOUND_BOTTOM                      
+.GM10               BODY_CENTER_BOTTOM                      
+.GM11               NCLEGEND-1-4                            
+.GM12               PEN1                                    
+.GM16               PIN_NUMBER                              
+.GM17               ASSEMBLY_BOTTOM                         
+.GM18               DRAWING_BOTTOM                          
+.GM20               DISPLAY_BOTTOM                          
+.GM21               ASSEMBLY_TOP                            
+.GM24               PAD_STACK_NAME                          
+.GM25               DISPLAY_TOP                             
+.GM26               DFA_BOUND_TOP_UD                        
+.GM27               AUTOSILK_TOP                            
+.GM28               COMPONENT VALUE                         
+.GKO                Keep-Out Layer                          
+.GPT                Top Pad Master                          
+.GPB                Bottom Pad Master                       
+.GD1                Drill Drawing                           
+.GG1                Drill Guide                             
+------------------------------------------------------------------------------------------

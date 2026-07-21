@@ -233,22 +233,6 @@ function Get-ReleaseVersion {
     $version
 }
 
-function Get-ArchiveCommit {
-    param([string]$Root)
-
-    $revisionFile = Join-Path $Root 'SOURCE_REVISION'
-    if (-not (Test-Path $revisionFile)) {
-        return ''
-    }
-
-    $line = (Get-Content -Path $revisionFile -Encoding UTF8 | Select-Object -First 1).Trim()
-    if ($line -match '^commit ([0-9a-fA-F]{7,40})$') {
-        return $Matches[1].Substring(0, 7).ToLowerInvariant()
-    }
-
-    ''
-}
-
 function New-VersionHeader {
     param(
         [string]$Root,
@@ -257,19 +241,12 @@ function New-VersionHeader {
 
     $version = Get-ReleaseVersion -Root $Root
     $commit = Get-GitValue -Root $Root -Arguments @('rev-parse', '--short=7', 'HEAD') -Fallback ''
-    if (-not $commit) {
-        $commit = Get-ArchiveCommit -Root $Root
-    }
-    if (-not $commit) {
-        $commit = '0000000'
-    }
     $dirty = Get-GitValue -Root $Root -Arguments @('status', '--porcelain', '--untracked-files=no') -Fallback ''
     $source = Get-GitValue -Root $Root -Arguments @('describe', '--tags', '--exact-match', 'HEAD') -Fallback ''
     if (-not $source) {
         $source = Get-GitValue -Root $Root -Arguments @('rev-parse', '--abbrev-ref', 'HEAD') -Fallback 'unknown'
     }
 
-    $timestamp = (Get-Date).ToString('yyyy-MM-dd HH:mm zzz')
     $generatedDir = Join-Path $BuildRoot 'generated'
     $header = Join-Path $generatedDir 'version.h'
     New-Item -ItemType Directory -Path $generatedDir -Force | Out-Null
@@ -280,10 +257,10 @@ function New-VersionHeader {
         "#define TK8620_ELRS_VERSION $(ConvertTo-CStringLiteral $version)",
         "#define TK8620_ELRS_VERSION_SOURCE $(ConvertTo-CStringLiteral $source)",
         "#define TK8620_ELRS_GIT_COMMIT $(ConvertTo-CStringLiteral $commit)",
+        "#define TK8620_ELRS_HAS_GIT_COMMIT $(if ($commit) { '1' } else { '0' })",
         "#define TK8620_ELRS_GIT_DIRTY $(if ($dirty) { '1' } else { '0' })",
         '#define ELRS_UPSTREAM_VERSION "3.5.6"',
         '#define ELRS_UPSTREAM_COMMIT "ee188b4efb9a707f682e8b2d966cd670de92ab50"',
-        "#define TK8620_ELRS_BUILD_TIMESTAMP $(ConvertTo-CStringLiteral $timestamp)",
         '',
         '#if TK8620_ELRS_GIT_DIRTY',
         '#define TK8620_ELRS_DIRTY_SUFFIX "-dirty"',
@@ -291,14 +268,19 @@ function New-VersionHeader {
         '#define TK8620_ELRS_DIRTY_SUFFIX ""',
         '#endif',
         '',
+        '#if TK8620_ELRS_HAS_GIT_COMMIT',
+        '#define TK8620_ELRS_COMMIT_SUFFIX " " TK8620_ELRS_GIT_COMMIT TK8620_ELRS_DIRTY_SUFFIX',
+        '#else',
+        '#define TK8620_ELRS_COMMIT_SUFFIX ""',
+        '#endif',
+        '',
         '#define TK8620_ELRS_VERSION_STRING \',
-        '    TK8620_ELRS_VERSION "-tk8620 elrs-" ELRS_UPSTREAM_VERSION " " TK8620_ELRS_GIT_COMMIT TK8620_ELRS_DIRTY_SUFFIX',
+        '    TK8620_ELRS_VERSION "-tk8620 elrs-" ELRS_UPSTREAM_VERSION TK8620_ELRS_COMMIT_SUFFIX',
         '',
         '#define TK8620_ELRS_MENU_VERSION \',
-        '    TK8620_ELRS_VERSION " " TK8620_ELRS_GIT_COMMIT TK8620_ELRS_DIRTY_SUFFIX',
+        '    TK8620_ELRS_VERSION TK8620_ELRS_COMMIT_SUFFIX',
         '',
-        '#define TK8620_ELRS_BUILD_ID \',
-        '    TK8620_ELRS_VERSION_STRING " " TK8620_ELRS_BUILD_TIMESTAMP'
+        '#define TK8620_ELRS_BUILD_ID TK8620_ELRS_VERSION_STRING'
     )
 
     Set-Content -Path $header -Value $lines -Encoding ASCII
@@ -308,7 +290,6 @@ function New-VersionHeader {
         Source    = $source
         Commit    = $commit
         Dirty     = [bool]$dirty
-        Timestamp = $timestamp
         Header    = $header
     }
 }
@@ -590,7 +571,12 @@ if (-not $toolchain.Compatible) {
 }
 
 $versionInfo = New-VersionHeader -Root $root -BuildRoot $buildRoot
-Write-Step "[VERSION] $($versionInfo.Version)-tk8620 elrs-3.5.6 $($versionInfo.Commit)$(if ($versionInfo.Dirty) { '-dirty' } else { '' })"
+$commitDisplay = if ($versionInfo.Commit) {
+    " $($versionInfo.Commit)$(if ($versionInfo.Dirty) { '-dirty' } else { '' })"
+} else {
+    ''
+}
+Write-Step "[VERSION] $($versionInfo.Version)-tk8620 elrs-3.5.6$commitDisplay"
 Write-Step "[PROFILE] $BuildProfile"
 
 if ($Target -in @('all', 'rx')) {

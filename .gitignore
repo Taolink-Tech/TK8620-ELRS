@@ -1,0 +1,6 @@
+# Generated build output
+/build/
+
+# Python cache files
+__pycache__/
+*.py[cod]

@@ -1,13 +1,23 @@
-# Boards
+# Hardware Boards
 
-This directory contains board-specific hardware files.
+This directory organizes TK8620 ELRS hardware reference files by module.
 
-Each board directory should contain one subdirectory per hardware revision. A
-revision directory is the authoritative boundary for schematic, PCB,
-manufacturing, mechanical, image, and bring-up files for that revision.
+TX and RX modules are separate boards. Each module directory contains the EDA
+source, available schematic exports, manufacturing outputs, and firmware
+compatibility information for that module.
 
-Recommended naming:
+## Boards
 
-- board directory: lowercase product or module name, for example
-  `tk8620-elrs`
-- revision directory: stable hardware revision, for example `rev-a` or `v1.0`
+| Module | Description | Files |
+| --- | --- | --- |
+| TK8620 ELRS TX Module | TX transmitter module hardware | [`tk8620-elrs-tx/`](tk8620-elrs-tx/) |
+| TK8620 ELRS RX Module | RX receiver module hardware | [`tk8620-elrs-rx/`](tk8620-elrs-rx/) |
+
+## Usage
+
+- New users can start with [`../PURCHASE.md`](../PURCHASE.md) to identify the
+  module to buy.
+- Firmware developers can open a module directory to check firmware
+  compatibility and interfaces.
+- Hardware developers can use a module directory as the starting point for a
+  custom product.

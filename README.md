@@ -1,19 +1,80 @@
 # TK8620 ELRS
 
-TK8620 ELRS is an ExpressLRS 3.5.6 firmware port for TK8620-based TX and RX
-modules.
+TK8620 ELRS is an ExpressLRS 3.5.6 firmware port and hardware reference package
+for TK8620-based TX and RX modules.
 
-This package includes:
+This repository is for people who want to use TK8620 hardware quickly and for
+developers who want to evaluate, customize, or integrate TK8620-based radio
+modules into their own products.
 
-- TX/RX application source code
-- public TK8620 SDK headers
-- TK8620 binary SDK library
-- Windows build scripts
-- Windows flashing scripts
-- TK8620 bootloader image
+You can use this repository to:
 
-The application source is licensed under GPL-3.0. The TK8620 binary SDK library
-is provided under `LICENSE.sdk.md`.
+- buy a TK8620 ELRS module and build firmware for it
+- review public hardware design files such as schematics, PCB files, BOMs, and
+  manufacturing outputs
+- modify the hardware reference design for your own product
+- use the ELRS firmware port as a compatibility reference for TK8620 hardware
+
+## Start Here
+
+| Goal | Start with |
+| --- | --- |
+| Buy hardware and flash firmware | [`hardware/PURCHASE.md`](hardware/PURCHASE.md) |
+| Build TX/RX firmware | [Build](#build) |
+| Flash a TX module | [Flash TX](#flash-tx) |
+| Flash an RX module over UART | [Flash RX](#flash-rx) |
+| Stage RX firmware for wireless update | [Stage RX Firmware For Wireless Update](#stage-rx-firmware-for-wireless-update) |
+| Review hardware files | [`hardware/README.md`](hardware/README.md) |
+| Customize your own hardware product | [`hardware/CUSTOMIZATION.md`](hardware/CUSTOMIZATION.md) |
+
+## Supported Hardware
+
+| Hardware | Role | Status | Hardware files | Purchase |
+| --- | --- | --- | --- | --- |
+| TK8620 ELRS TX Module | TX | Released | [`hardware/boards/tk8620-elrs-tx/`](hardware/boards/tk8620-elrs-tx/) | [`hardware/PURCHASE.md`](hardware/PURCHASE.md) |
+| TK8620 ELRS RX Module | RX | Released | [`hardware/boards/tk8620-elrs-rx/`](hardware/boards/tk8620-elrs-rx/) | [`hardware/PURCHASE.md`](hardware/PURCHASE.md) |
+
+Use files from the matching module directory. Do not mix TX and RX schematics,
+PCB files, BOMs, placement files, or manufacturing outputs.
+
+## Repository Contents
+
+- `applications/ELRS_Tx/`: TX application firmware source.
+- `applications/ELRS_Rx/`: RX application firmware source.
+- `applications/ELRS_Common/`: shared TX/RX application source.
+- `hardware/`: hardware reference files, purchase notes, manufacturing outputs,
+  and customization guidance.
+- `open-sdk/include/`: public TK8620 SDK headers.
+- `open-sdk/lib/libtk86xx.a`: TK8620 binary SDK library.
+- `firmware/bootloader/`: bootloader image used by `burn.cmd`.
+- `tools/`: build, flashing, and packaging tools.
+- `VERSION`: repository release version.
+
+This repository does not include prebuilt, linked TX or RX application
+firmware. The TX and RX firmware images described below are generated locally
+when the user runs the build scripts.
+
+## License Model
+
+This is a mixed-license repository. The ELRS application firmware is derived
+from ExpressLRS and remains under GPL-3.0. The TK8620 SDK headers and binary
+library are provided under the custom
+`LicenseRef-Taolink-TK8620-SDK-Package` license in `LICENSE.sdk.md`.
+
+Hardware reference files under `hardware/` are licensed under the permissive
+`CERN-OHL-P-2.0` hardware license unless a specific file states another license.
+Customers can modify the hardware for their own products without being required
+to publish those hardware changes. Scope and trademark notes are in
+[`hardware/LICENSE.md`](hardware/LICENSE.md).
+
+Taolink-owned build, flashing, and packaging tools are provided under the
+custom `LicenseRef-Taolink-TK8620-Bundled-Tools` license in `LICENSE.tools.md`.
+Third-party components retain their upstream licenses as listed in
+`THIRD_PARTY_LICENSES.md`.
+
+The TK8620 bootloader binary is provided under the custom
+`LicenseRef-Taolink-TK8620-Bootloader-Binary` license in
+`LICENSE.bootloader.md`.
 
 ## Requirements
 
@@ -38,7 +99,7 @@ The expected compiler is GCC `9.2.0`.
 
 ## Build
 
-Open PowerShell in this directory.
+Open PowerShell in this repository directory.
 
 Build RX firmware:
 
@@ -52,7 +113,7 @@ Build TX firmware:
 .\build.cmd tx
 ```
 
-Build both:
+Build both TX and RX:
 
 ```powershell
 .\build.cmd
@@ -64,14 +125,14 @@ Clean build output:
 .\build.cmd clean
 ```
 
-Build output is written to:
+Build output:
 
 - `build/ELRS_Rx/TK8620_ELRS_RX_P.hex`
 - `build/ELRS_Tx/TK8620_ELRS_TX_P.hex`
 
 ## Flash TX
 
-Build the TX firmware first:
+Build TX firmware first:
 
 ```powershell
 .\build.cmd tx
@@ -85,7 +146,10 @@ Connect the TX module UART through a USB-to-UART adapter, then run:
 
 The script lists detected COM ports and asks you to select the target port.
 
-## Stage RX Firmware For Wireless Update
+## Flash RX
+
+Use this method when you can connect the RX module UART directly to a
+USB-to-UART adapter.
 
 Build the RX firmware first:
 
@@ -93,7 +157,29 @@ Build the RX firmware first:
 .\build.cmd rx
 ```
 
-Stage the RX firmware image into TX flash:
+Connect the RX module UART through a USB-to-UART adapter, then run:
+
+```powershell
+.\burn.cmd rx
+```
+
+The script lists detected COM ports and asks you to select the RX module port.
+This command flashes the RX module over its UART connection.
+
+## Stage RX Firmware For Wireless Update
+
+Use this method when the RX module will be updated wirelessly from the TX
+module. In this flow, the computer connects to the TX module UART. The RX module
+does not need to be connected to the computer by UART.
+
+Build the RX firmware first:
+
+```powershell
+.\build.cmd rx
+```
+
+Connect the TX module UART through a USB-to-UART adapter, then stage the RX
+firmware image into TX flash:
 
 ```powershell
 .\burn.cmd rx-stash
@@ -105,24 +191,25 @@ The RX image path is fixed:
 build/ELRS_Rx/TK8620_ELRS_RX_P.hex
 ```
 
-After staging, start the RX wireless update from the TX firmware, then reset or
-power-cycle the RX module after the update completes.
+After staging, keep the RX module within RF range of the TX module. Start the RX
+wireless update from the TX firmware by using one of these methods:
 
-## Files
+- Send this hexadecimal command to the TX module serial port:
 
-- `applications/ELRS_Tx/`: TX application source
-- `applications/ELRS_Rx/`: RX application source
-- `applications/ELRS_Common/`: shared application source
-- `hardware/`: hardware design files, manufacturing outputs, and board notes
-- `open-sdk/include/`: public TK8620 SDK headers
-- `open-sdk/lib/libtk86xx.a`: TK8620 binary SDK library
-- `firmware/bootloader/`: bootloader image used by `burn.cmd`
-- `tools/`: build and flashing tools
-- `VERSION`: TK8620 ELRS release version
+  ```text
+  EE062DEEEF0A0150
+  ```
+
+- Open the transmitter Lua menu and start the RX wireless update from the menu.
+
+After the TX module enters wireless update mode, reset or power-cycle the RX
+module. Wait for the wireless update to complete.
 
 ## Licenses
 
-- `LICENSE.md`: GPL-3.0 license for the application source
-- `LICENSE.sdk.md`: TK8620 binary SDK license
-- `LICENSE.tools.md`: bundled Taolink tool license
-- `THIRD_PARTY_LICENSES.md`: third-party notices
+- `LICENSE.md`: GPL-3.0 license for ELRS-derived application firmware.
+- `hardware/LICENSE.md`: CERN-OHL-P-2.0 license scope for hardware files.
+- `LICENSE.sdk.md`: custom TK8620 SDK package license.
+- `LICENSE.bootloader.md`: custom TK8620 bootloader binary license.
+- `LICENSE.tools.md`: custom bundled Taolink tools license.
+- `THIRD_PARTY_LICENSES.md`: third-party notices.

@@ -1,0 +1,5 @@
+Record=TopLevelDocument|FileName=01_SOC.SchDoc|SheetNumber=1
+Record=NoMainPathDocument|SourceDocument=01_SOC.SchDoc|FileName=02_RF.SchDoc|SheetNumber=2
+Record=NoMainPathDocument|SourceDocument=01_SOC.SchDoc|FileName=03_Power.SchDoc|SheetNumber=3
+Record=NoMainPathDocument|SourceDocument=01_SOC.SchDoc|FileName=04_UART.SchDoc|SheetNumber=4
+Record=NoMainPathDocument|SourceDocument=01_SOC.SchDoc|FileName=05_Notes.SchDoc|SheetNumber=5

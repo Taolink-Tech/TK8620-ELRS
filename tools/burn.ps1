@@ -23,7 +23,7 @@ $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $validModes = @("tx", "rx", "rx-stash", "help")
 if ($Mode -notin $validModes) {
     Write-Host "Unknown mode: $Mode" -ForegroundColor Red
-    Write-Host "Valid modes: tx, rx-stash, help"
+    Write-Host "Valid modes: tx, rx, rx-stash, help"
     Write-Host ""
     Write-Host "Use rx-stash to stage Rx firmware into Tx flash before wireless update."
     exit 1
@@ -40,6 +40,8 @@ if ($Mode -eq "help") {
     Write-Host "Available targets:"
     Write-Host "  .\burn.cmd tx"
     Write-Host "      Flash TX bootloader and build\ELRS_Tx\TK8620_ELRS_TX_P.hex over UART"
+    Write-Host "  .\burn.cmd rx"
+    Write-Host "      Flash RX bootloader and build\ELRS_Rx\TK8620_ELRS_RX_P.hex over UART"
     Write-Host "  .\burn.cmd rx-stash"
     Write-Host "      Stage build\ELRS_Rx\TK8620_ELRS_RX_P.hex into TX flash for wireless update"
     Write-Host ""
