@@ -21,16 +21,15 @@ typedef enum
 {
     PWR_0p1mW = 0, // -10 dBm
     PWR_1mW = 1, // 0 dBm
-    PWR_3mW = 2, // 5 dBm (3.16 mW nominal)
-    PWR_10mW = 3, // 10 dBm
-    PWR_25mW = 4, // 13.98 dBm, 14dBm
-    PWR_50mW = 5, // 16.99dBm, 17 dBm
-    PWR_100mW = 6, // 20 dBm
-    PWR_250mW = 7, // 23.98dBm, 24 dBm
-    PWR_500mW = 8, // 26.99dBm, 27 dBm
-    PWR_1000mW = 9, // 30 dBm
-    PWR_2000mW = 10, // 33.0133dBm, 33 dBm
-    PWR_COUNT = 11,
+    PWR_10mW = 2, // 10 dBm
+    PWR_25mW = 3, // 13.98 dBm, 14dBm
+    PWR_50mW = 4, // 16.99dBm, 17 dBm
+    PWR_100mW = 5, // 20 dBm
+    PWR_250mW = 6, // 23.98dBm, 24 dBm
+    PWR_500mW = 7, // 26.99dBm, 27 dBm
+    PWR_1000mW = 8, // 30 dBm
+    PWR_2000mW = 9, // 33.0133dBm, 33 dBm
+    PWR_COUNT = 10,
     PWR_MATCH_TX = PWR_COUNT,
 } PowerLevels_e;
 

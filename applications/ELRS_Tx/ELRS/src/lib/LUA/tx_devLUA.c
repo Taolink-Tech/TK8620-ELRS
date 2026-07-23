@@ -52,11 +52,13 @@ static const char crsfSerialBaudOpts[] = "400k;420k;921k";
 // static const char luastrHeadTrackingStart[] = STR_LUA_ALLAUX;
 static const char luastrOffOn[] = "Off;On";
 static char luastrPacketRates[] = STR_LUA_PACKETRATES;
-// Calibrated product output power after the PA, displayed in mW.
-// Nominal 1000 mW maximum; measured product output is 30.5 dBm.
-static char txPowerLevels[] = "100;1000";
+// Product output power after the PA, displayed in mW.
+static char txPowerLevels[] = "50;100;250;500;1000";
 static const PowerLevels_e txPowerOptionMap[] = {
+    TX_POWER_50mW,
     TX_POWER_100mW,
+    TX_POWER_250mW,
+    TX_POWER_500mW,
     TX_POWER_1000mW,
 };
 static int event();
@@ -97,7 +99,7 @@ static luaItem_folder_t luaPowerFolder = {
 
 static luaItem_selection_t luaPower = {
     {"Max Power", CRSF_TEXT_SELECTION},
-    0, // default display: 100 mW product output / 20 dBm
+    (uint8_t)TX_POWER_100mW, // default display: 100 mW product output / 20 dBm
     txPowerLevels,
     "mW"
 };
@@ -933,8 +935,16 @@ static int event()
   // setLuaTextSelectionValue(&luaLinkMode, txConfig.GetLinkMode());
   luadevUpdateModelID();
   setLuaTextSelectionValue(&luaModelMatch, (uint8_t)txConfig.GetModelMatch());
-  setLuaTextSelectionValue(&luaPower,
-                           txConfig.GetPower() == (uint8_t)TX_POWER_1000mW ? 1U : 0U);
+  uint8_t powerOption = 0;
+  for (uint8_t i = 0; i < ARRAY_SIZE(txPowerOptionMap); ++i)
+  {
+    if (txConfig.GetPower() == (uint8_t)txPowerOptionMap[i])
+    {
+      powerOption = i;
+      break;
+    }
+  }
+  setLuaTextSelectionValue(&luaPower, powerOption);
 //   if (GPIO_PIN_FAN_EN != UNDEF_PIN || GPIO_PIN_FAN_PWM != UNDEF_PIN)
 //   {
 //     setLuaTextSelectionValue(&luaFanThreshold, txConfig.GetPowerFanThreshold());

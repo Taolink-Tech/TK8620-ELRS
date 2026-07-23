@@ -75,9 +75,6 @@ int8_t POWERMGNT_getPowerIndBm(void)
 {
     switch (POWERMGNT.CurrentPower)
     {
-    case PWR_0p1mW: return -10;
-    case PWR_1mW: return 0;
-    case PWR_3mW: return 5;
     case PWR_10mW: return 10;
     case PWR_25mW: return 14;
     case PWR_50mW: return 17;

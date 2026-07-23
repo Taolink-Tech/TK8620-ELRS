@@ -15,7 +15,12 @@ uint8_t powerToCrsfPower(PowerLevels_e power)
     // Report calibrated product output power, not the chip drive level.
     switch (power)
     {
+    case TX_POWER_10mW: return 1;
+    case TX_POWER_25mW: return 2;
+    case TX_POWER_50mW: return 8;
     case TX_POWER_100mW: return 3;
+    case TX_POWER_250mW: return 7;
+    case TX_POWER_500mW: return 4;
     case TX_POWER_1000mW: return 5;
     default:
         return 0;
@@ -26,10 +31,14 @@ PowerLevels_e crsfpowerToPower(uint8_t crsfpower)
 {
     switch (crsfpower)
     {
+    case 1: return TX_POWER_10mW;
+    case 2: return TX_POWER_25mW;
     case 3: return TX_POWER_100mW;
-    case 4:
-    case 5:
+    case 4: return TX_POWER_500mW;
+    case 5: return TX_POWER_1000mW;
     case 6: return TX_POWER_1000mW;
+    case 7: return TX_POWER_250mW;
+    case 8: return TX_POWER_50mW;
     default:
         return TxDefaultPower;
     }
@@ -38,7 +47,7 @@ PowerLevels_e crsfpowerToPower(uint8_t crsfpower)
 static POWERMGNT_t POWERMGNT = {
     .CurrentPower = TxDefaultPower,
     .FanEnableThreshold = TX_POWER_1000mW,
-    .MinPower = TX_POWER_100mW,
+    .MinPower = TX_POWER_50mW,
     .MaxPower = TX_POWER_1000mW,
 };
 
@@ -65,9 +74,15 @@ int8_t POWERMGNT_getPowerIndBm(void)
 {
     switch (POWERMGNT.CurrentPower)
     {
-    case TX_POWER_100mW: return 5;
-    case TX_POWER_1000mW: return 20; // Product output measured at 30.5 dBm.
-    default: return 5;
+    // Conducted measurements show that the PA turns on between -1 and 0 dBm
+    // chip drive. The 0 dBm drive point produces about 18.45 dBm (70 mW),
+    // while lower drive points do not provide usable product output.
+    case TX_POWER_50mW: return 0;
+    case TX_POWER_100mW: return 3;
+    case TX_POWER_250mW: return 6;
+    case TX_POWER_500mW: return 10;
+    case TX_POWER_1000mW: return 14;
+    default: return 3;
     }
 }
 

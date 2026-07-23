@@ -410,8 +410,9 @@ function Build-Project {
         "-DRSSI_COMP_DB=$RssiCompDb"
     )
 
-    if ($Project.Kind -eq 'tx') {
-        $commonArgs += '-DELRS_TX_TARGET=1'
+    switch ($Project.Kind) {
+        'tx' { $commonArgs += '-DELRS_DEVICE_ROLE_TX=1' }
+        'rx' { $commonArgs += '-DELRS_DEVICE_ROLE_RX=1' }
     }
 
     switch ($BuildProfile) {
