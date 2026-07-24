@@ -15,11 +15,17 @@ You can use this repository to:
 - modify the hardware reference design for your own product
 - use the ELRS firmware port as a compatibility reference for TK8620 hardware
 
+## Purchase and Contact
+
+- Buy TK8620 ELRS TX/RX modules: [Taobao product page](https://item.taobao.com/item.htm?id=1068476636220)
+- Company contact: [+8616621375462](tel:+8616621375462)
+
 ## Start Here
 
 | Goal | Start with |
 | --- | --- |
-| Buy hardware and flash firmware | [`hardware/PURCHASE.md`](hardware/PURCHASE.md) |
+| Buy a TK8620 ELRS module | [Taobao product page](https://item.taobao.com/item.htm?id=1068476636220) |
+| Choose a module and review purchase notes | [`hardware/PURCHASE.md`](hardware/PURCHASE.md) |
 | Build TX/RX firmware | [Build](#build) |
 | Flash a TX module | [Flash TX](#flash-tx) |
 | Flash an RX module over UART | [Flash RX](#flash-rx) |
