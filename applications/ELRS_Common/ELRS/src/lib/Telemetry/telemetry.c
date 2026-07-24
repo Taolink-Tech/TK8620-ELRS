@@ -4,10 +4,12 @@
 #include "crc.h"
 #include "helpers.h"
 #include "FIFO.h"
+#include "tk86xx_platform.h"
 
 // #include <functional>
 
 #define BIT(a) (1 << (a))
+#define CRSF_UART_FRAME_TIMEOUT_MS 100U
 
 #if defined(__GNUC__)
 extern Telemetry_t telemetry __attribute__((weak));
@@ -28,6 +30,8 @@ typedef enum {
 } action_e;
 
 typedef action_e (*comparator_t)(const crsf_header_t *newMessage, const TelemetryFifo_t *payloads, uint16_t queuePosition);
+
+static uint32_t s_lastTelemetryByteMillis = 0;
 
 // For broadcast messages that have a 'source_id' as the first byte of the payload.
 static action_e sourceId(const crsf_header_t *newMessage, const TelemetryFifo_t *payloads, const uint16_t queuePosition)
@@ -145,11 +149,21 @@ static void Telemetry_ResetState()
     telemetry.telemetry_state = TELEMETRY_IDLE;
     telemetry.currentTelemetryByte = 0;
     telemetry.prioritizedCount = 0;
+    s_lastTelemetryByteMillis = 0;
     // messagePayloads.flush();
 }
 
 static bool Telemetry_RXhandleUARTin(uint8_t data)
 {
+    const uint32_t now = millis();
+    if (telemetry.telemetry_state != TELEMETRY_IDLE &&
+        (uint32_t)(now - s_lastTelemetryByteMillis) > CRSF_UART_FRAME_TIMEOUT_MS)
+    {
+        telemetry.telemetry_state = TELEMETRY_IDLE;
+        telemetry.currentTelemetryByte = 0;
+    }
+    s_lastTelemetryByteMillis = now;
+
     switch (telemetry.telemetry_state) {
         case TELEMETRY_IDLE:
             // Telemetry from Betaflight/iNav starts with CRSF_SYNC_BYTE (CRSF_ADDRESS_FLIGHT_CONTROLLER)
@@ -167,7 +181,7 @@ static bool Telemetry_RXhandleUARTin(uint8_t data)
 
             break;
         case RECEIVING_LENGTH:
-            if (data >= CRSF_MAX_PACKET_LEN)
+            if (data < 2 || data > (CRSF_MAX_PACKET_LEN - CRSF_FRAME_NOT_COUNTED_BYTES))
             {
                 telemetry.telemetry_state = TELEMETRY_IDLE;
                 return false;

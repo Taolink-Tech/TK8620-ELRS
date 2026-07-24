@@ -410,6 +410,10 @@ function Build-Project {
         "-DRSSI_COMP_DB=$RssiCompDb"
     )
 
+    if ($Project.Kind -eq 'tx') {
+        $commonArgs += '-DELRS_TX_TARGET=1'
+    }
+
     switch ($BuildProfile) {
         'signal-generator' {
             $commonArgs += '-DSENSI_TEST=1'

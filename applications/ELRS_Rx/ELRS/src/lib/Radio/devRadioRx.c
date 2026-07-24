@@ -98,9 +98,9 @@ void DevRadioRx_RequestAirRateChange(uint8_t newRateIndex)
     s_pendingAirRateIndex = newRateIndex;
     ExpressLRS_currAirRate_Modparams = get_elrs_airRateConfig(s_pendingAirRateIndex);
     if (ExpressLRS_currAirRate_Modparams) {
-        DBGLN("[AIRRATE][RX] request idx=%u(%s) interval_us=%lu payload=%u", (unsigned)s_pendingAirRateIndex,
+        DBGLN("[AIRRATE][RX] request idx=%u(%s) interval_us=%u payload=%u", (unsigned)s_pendingAirRateIndex,
               airRateIndexToStr(s_pendingAirRateIndex),
-              (unsigned long)ExpressLRS_currAirRate_Modparams->interval,
+              (unsigned)ExpressLRS_currAirRate_Modparams->interval,
               (unsigned)ExpressLRS_currAirRate_Modparams->PayloadLength);
     } else {
         DBGLN("[AIRRATE][RX] request idx=%u(%s) mod=NULL", (unsigned)s_pendingAirRateIndex, airRateIndexToStr(s_pendingAirRateIndex));

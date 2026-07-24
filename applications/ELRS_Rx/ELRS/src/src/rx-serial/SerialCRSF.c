@@ -18,6 +18,7 @@ extern Telemetry_t telemetry __attribute__((weak));
 extern SerialIO_t serialIO;
 // extern void reset_into_bootloader();
 extern void UpdateModelMatch(uint8_t model);
+void EnterRxBindingModeSafely(void) __attribute__((weak));
 
 static uint16_t map_rssi_dbm_to_uint10(int32_t rssi_dbm, int32_t min_dbm)
 {
@@ -152,7 +153,10 @@ void SerialCRSF_processBytes(uint8_t *bytes, uint16_t size)
         }
         if (telemetry.ShouldCallEnterBind())
         {
-            // EnterRxBindingModeSafely();
+            if (EnterRxBindingModeSafely)
+            {
+                EnterRxBindingModeSafely();
+            }
         }
         if (telemetry.ShouldCallUpdateModelMatch())
         {

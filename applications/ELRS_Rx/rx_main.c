@@ -102,13 +102,14 @@ static void PrintSensiStats(SignalQuality_t *signalQuality, bool hasPayload)
 #endif
 
 #define RX_LUA_VERSION_FIELD_ID               2U
-#define RX_VERSION_PUSH_FAST_WINDOW_MS    10000U
-#define RX_VERSION_PUSH_FAST_INTERVAL_MS   1000U
-#define RX_VERSION_PUSH_SLOW_INTERVAL_MS  10000U
+// Stubborn transport guarantees delivery; do not occupy it with periodic version pushes.
+static bool rxVersionPushQueued;
+static bool rxRebootRequested;
 
-static bool rxVersionPushConnected;
-static uint32_t rxVersionPushConnectedMs;
-static uint32_t rxVersionPushLastMs;
+void RequestRxReboot(void)
+{
+    rxRebootRequested = true;
+}
 
 #define UPLINK_LQ_HISTORY_SIZE        100U
 #define UPLINK_LQ_HISTORY_MIN_SIZE    10U
@@ -793,6 +794,19 @@ static void setupSerial()
     SerialIO_SetProtocol(&serialIO, proto);
 }
 
+void ApplyRxSerialProtocol(eSerialProtocol_e protocol)
+{
+    if (protocol != PROTOCOL_CRSF && protocol != PROTOCOL_SBUS)
+    {
+        return;
+    }
+
+    rxConfig.SetSerialProtocol(protocol);
+    rxConfig.Commit();
+    setupSerial();
+    devicesTriggerEvent();
+}
+
 static void SetRFLinkRate(uint8_t index, bool bindMode) // Set speed of RF link
 {
     DBGLN("SetRFLinkRate: index = %u", index);
@@ -949,6 +963,8 @@ static void LostConnection(bool resumeRx)
         //     hwTimer::stop();
         // }
         SetRFLinkRate(ExpressLRS_nextAirRateIndex, false); // also sets to initialFreq
+        DevRadioRx_RequestAirRateChange(ExpressLRS_nextAirRateIndex);
+        devicesTriggerEvent();
         // If not resumRx, Radio will be left in SX127x_OPMODE_STANDBY / SX1280_MODE_STDBY_XOSC
         // if (resumeRx)
         // {
@@ -984,7 +1000,9 @@ static void ExitBindingMode()
     // Do this last as LostConnection() will wait for a tock that never comes
     // if we're in binding mode
     InBindingMode = false;
-    SetRFLinkRate(rxConfig.GetRateInitialIdx(), false);
+    scanIndex = rxConfig.GetRateInitialIdx();
+    SetRFLinkRate(scanIndex, false);
+    DevRadioRx_RequestAirRateChange(scanIndex);
     ExpressLRS_currTlmDenom = TLMratioEnumToValue(ExpressLRS_currAirRate_Modparams->TLMinterval);
     DBGLN("Exiting binding mode");
     devicesTriggerEvent();
@@ -1056,6 +1074,13 @@ static void updateTelemetryBurst()
 void UpdateModelMatch(uint8_t model)
 {
     rxConfig.SetModelId(model);
+    if (model == 0xff)
+    {
+        // Disabling model match makes every packet from the bound TX valid.
+        // Do not keep RC output inhibited until a later sync packet happens
+        // to refresh this runtime flag.
+        connectionHasModelMatch = true;
+    }
 }
 
 static bool HandleRxConfigMspWrite(const uint8_t totalLen)
@@ -1073,6 +1098,11 @@ static bool HandleRxConfigMspWrite(const uint8_t totalLen)
     }
 
     UpdateModelMatch(MspData[9]);
+    // This command arrived over the active OTA MSP link from the TX that is
+    // already using the requested model ID. Accept its following RC packets
+    // immediately instead of waiting for a later sync packet to refresh the
+    // runtime match flag.
+    connectionHasModelMatch = true;
     return true;
 }
 
@@ -1152,7 +1182,7 @@ static void updateSwitchMode()
     SwitchModePending = 0;
 }
 
-static void queueRxVersionTelemetryIfIdle(uint32_t now)
+static void queueRxVersionTelemetryIfIdle(void)
 {
     const bool linkReady =
         connectionState == connected &&
@@ -1163,26 +1193,10 @@ static void queueRxVersionTelemetryIfIdle(uint32_t now)
 
     if (!linkReady)
     {
-        rxVersionPushConnected = false;
-        rxVersionPushConnectedMs = 0U;
-        rxVersionPushLastMs = 0U;
         return;
     }
 
-    if (!rxVersionPushConnected)
-    {
-        rxVersionPushConnected = true;
-        rxVersionPushConnectedMs = now;
-        rxVersionPushLastMs = 0U;
-    }
-
-    const uint32_t connectedMs = now - rxVersionPushConnectedMs;
-    const uint32_t intervalMs =
-        (connectedMs < RX_VERSION_PUSH_FAST_WINDOW_MS) ?
-        RX_VERSION_PUSH_FAST_INTERVAL_MS :
-        RX_VERSION_PUSH_SLOW_INTERVAL_MS;
-
-    if (rxVersionPushLastMs != 0U && (now - rxVersionPushLastMs) < intervalMs)
+    if (rxVersionPushQueued)
     {
         return;
     }
@@ -1195,7 +1209,7 @@ static void queueRxVersionTelemetryIfIdle(uint32_t now)
     }
 
     luaParamUpdateReq(CRSF_FRAMETYPE_PARAMETER_READ, RX_LUA_VERSION_FIELD_ID, 0U);
-    rxVersionPushLastMs = now;
+    rxVersionPushQueued = true;
 }
 
 static void loop(void)
@@ -1204,7 +1218,10 @@ static void loop(void)
     devicesUpdate(now);
     // Read and process serial traffic, including queued telemetry payloads.
     handleSerialIO();
-    wdt_feed();
+    if (!rxRebootRequested)
+    {
+        wdt_feed();
+    }
     updateBindingMode(now);
     executeDeferredFunction(micros());
     if (connectionState != connectionState_backup)
@@ -1217,7 +1234,7 @@ static void loop(void)
     {
         MspReceiveComplete();
     }
-    queueRxVersionTelemetryIfIdle(now);
+    queueRxVersionTelemetryIfIdle();
     luaHandleUpdateParameter();
     CheckConfigChangePending();
 

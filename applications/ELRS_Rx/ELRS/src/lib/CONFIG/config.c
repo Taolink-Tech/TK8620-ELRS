@@ -246,6 +246,15 @@ void RxConfig_SetRateInitialIdx(uint8_t rateInitialIdx)
     }
 }
 
+static void RxConfigSetSerialProtocol(eSerialProtocol_e serialProtocol)
+{
+    if (rxConfig.m_config.serialProtocol != (uint8_t)serialProtocol)
+    {
+        rxConfig.m_config.serialProtocol = (uint8_t)serialProtocol;
+        rxConfig.m_modified = true;
+    }
+}
+
 static void RxConfigReturnLoan(void)
 {
     if (rxConfig.IsOnLoan())
@@ -300,6 +309,7 @@ void RxConfig_Init(RxConfig_t *config)
     config->GetPowerOnCounter = RxConfig_GetPowerOnCounter;
     config->GetRateInitialIdx = RxConfig_GetRateInitialIdx;
     config->SetRateInitialIdx = RxConfig_SetRateInitialIdx;
+    config->SetSerialProtocol = RxConfigSetSerialProtocol;
     config->SetModelId = RxConfig_SetModelId;
     config->SetPower = RxConfig_SetPower;
 }

@@ -75,8 +75,20 @@ static uint16_t readBytes(uint8_t *dest, uint16_t maxlen)
 static void SerialIO_processSerialInput(void)
 {
     uint8_t buffer[defaultMaxSerialReadSize];
-    uint8_t size = readBytes(buffer, defaultMaxSerialReadSize);
-    serialIO.processBytes(buffer, size);
+    uint16_t processed = 0;
+
+    /* Drain one ring-buffer capacity per loop without allowing continuous
+       UART input to starve the rest of the receiver main loop. */
+    while (processed < defaultMaxSerialWriteSize) {
+        uint16_t remaining = (uint16_t)(defaultMaxSerialWriteSize - processed);
+        uint16_t request = MIN((uint16_t)defaultMaxSerialReadSize, remaining);
+        uint16_t size = readBytes(buffer, request);
+        if (size == 0) {
+            break;
+        }
+        serialIO.processBytes(buffer, size);
+        processed = (uint16_t)(processed + size);
+    }
 }
 
 static void SerialIO_sendQueuedData(uint32_t maxBytesToSend)

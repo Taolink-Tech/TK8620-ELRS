@@ -35,7 +35,8 @@
 #include "rx_ota_sender.h"
 
 #define BindingSpamAmount 25
-#define syncSpamAmount 30
+// Rate changes have no receiver acknowledgement, so cover low-LQ links with a longer SYNC burst.
+#define syncSpamAmount 100
 #define syncSpamAmountAfterRateChange 10
 
 device_affinity_t ui_devices[] = {
@@ -51,6 +52,8 @@ TxConfig_t txConfig;
 uint8_t MSPDataPackage[5];
 static StubbornReceiver_t TelemetryReceiver;
 StubbornSender_t MspSender;
+// Preserve a changed downlink confirm until an uplink RC packet is actually queued.
+static volatile bool TelemetryConfirmPending = false;
 static volatile uint32_t LastTLMpacketRecvMillis = 0;
 static uint8_t CRSFinBuffer[CRSF_MAX_PACKET_LEN+1];
 static uint32_t TLMpacketReported = 0;
@@ -310,6 +313,8 @@ static void ChangeRadioParams()
   // DBGLN("txConfig.GetRate() = %u", txConfig.GetRate());
   SetRFLinkRate(txConfig.GetRate());
   ExpressLRS_currTlmDenom = TLMratioEnumToValue(ExpressLRS_currAirRate_Modparams->TLMinterval);
+  txLostSignal = true;
+  devicesTriggerEvent();
 }
 
 static void LinkStatsFromOta(OTA_LinkStats_s * const ls)
@@ -340,6 +345,7 @@ static void LinkStatsFromOta(OTA_LinkStats_s * const ls)
 static bool ProcessTLMpacket(uint8_t *data, uint16_t data_len, SignalQuality_t *signalQuality)
 {
   const uint32_t now = millis();
+  const bool telemetryConfirmBefore = TelemetryReceiver.GetCurrentConfirm();
 #if SENSI_TEST
   LastTLMpacketRecvMillis = now;
   lastLostMillis = now + 10 * 1000;
@@ -407,6 +413,11 @@ static bool ProcessTLMpacket(uint8_t *data, uint16_t data_len, SignalQuality_t *
           sizeof(otaPktPtr->std.tlm_dl.payload));
         break;
     }
+  }
+
+  if (TelemetryReceiver.GetCurrentConfirm() != telemetryConfirmBefore)
+  {
+    TelemetryConfirmPending = true;
   }
 
   return true;
@@ -529,8 +540,9 @@ static expresslrs_tlm_ratio_e UpdateTlmRatioEffective()
       LastTLMpacketRecvMillis = SyncPacketLastSent;
 
     if (ExpressLRS_currTlmDenom != newTlmDenom) {
+      const uint8_t previousTlmDenom = ExpressLRS_currTlmDenom;
       ExpressLRS_currTlmDenom = newTlmDenom;
-      tlmChanged = true;
+      DevRadioTx_RequestTlmRatioChange(previousTlmDenom);
       devicesTriggerEvent();
     }
   }
@@ -670,15 +682,17 @@ static void SendRCdataToRF(bool isRcData)
         {
         //   injectBackpackPanTiltRollData(now);
 
-            if (isRcData && !InBindingMode) {
+            if ((isRcData || TelemetryConfirmPending) && !InBindingMode) {
                 syncPacketCount++;
                 p = (uint8_t *)&otaPkt.full.rc;
                 OtaPackChannelData(&otaPkt, ChannelData, TelemetryReceiver.GetCurrentConfirm(), ExpressLRS_currTlmDenom);
                 OtaGeneratePacketCrc(&otaPkt);
                 // DBGLN("ExpressLRS_currAirRate_Modparams->PayloadLength = %u", ExpressLRS_currAirRate_Modparams->PayloadLength);
                 QueueTxPayload(p);
-                if (TxPayloadPending)
+                if (TxPayloadPending) {
+                    TelemetryConfirmPending = false;
                     NextPacketIsMspData = true;
+                }
             }
         }
     }

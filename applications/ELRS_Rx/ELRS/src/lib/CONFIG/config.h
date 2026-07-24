@@ -125,7 +125,7 @@ typedef struct {
 //     #endif
 //     void SetForceTlmOff(bool forceTlmOff);
     void (*SetRateInitialIdx)(uint8_t rateInitialIdx);
-//     void SetSerialProtocol(eSerialProtocol_e serialProtocol);
+    void (*SetSerialProtocol)(eSerialProtocol_e serialProtocol);
 // #if defined(PLATFORM_ESP32)
 //     void SetSerial1Protocol(eSerial1Protocol serial1Protocol);
 // #endif

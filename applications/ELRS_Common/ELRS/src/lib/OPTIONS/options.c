@@ -9,7 +9,11 @@ const char firmware_menu_version[] = TK8620_ELRS_MENU_VERSION;
 const char firmware_build_id[] = TK8620_ELRS_BUILD_ID;
 const char firmware_upstream[] = "ExpressLRS " ELRS_UPSTREAM_VERSION " " ELRS_UPSTREAM_COMMIT;
 #ifndef DEVICE_NAME
+#if defined(ELRS_TX_TARGET)
+#define DEVICE_NAME "ELRS 900TX"
+#else
 #define DEVICE_NAME "ELRS 900RX"
+#endif
 #endif
 const char device_name[] = DEVICE_NAME;
 

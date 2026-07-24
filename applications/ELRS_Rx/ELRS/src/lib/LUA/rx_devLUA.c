@@ -5,6 +5,8 @@
 #include "options.h"
 
 extern RxConfig_t rxConfig;
+void ApplyRxSerialProtocol(eSerialProtocol_e protocol) __attribute__((weak));
+void RequestRxReboot(void) __attribute__((weak));
 
 static char modelString[] = "000";
 
@@ -17,6 +19,49 @@ static struct luaItem_string luaELRSversion = {
     {"Version", CRSF_INFO},
     firmware_menu_version
 };
+
+static luaItem_selection_t luaSerialProtocol = {
+    {"Serial Protocol", CRSF_TEXT_SELECTION},
+    0,
+    "CRSF;SBUS",
+    ""
+};
+
+static struct luaItem_command luaReboot = {
+    {"Reboot", CRSF_COMMAND},
+    lcsIdle,
+    ""
+};
+
+static void rebootCommand(luaPropertiesCommon_t *item, uint8_t arg)
+{
+    if (arg != lcsClick && arg != lcsConfirmed)
+    {
+        return;
+    }
+
+    sendLuaCommandResponse((struct luaItem_command *)item, lcsExecuting, "Rebooting...");
+    if (RequestRxReboot)
+    {
+        RequestRxReboot();
+    }
+}
+
+static void serialProtocolChanged(luaPropertiesCommon_t *item, uint8_t arg)
+{
+    (void)item;
+    if (arg > 1U)
+    {
+        return;
+    }
+
+    eSerialProtocol_e protocol = (arg == 0U) ? PROTOCOL_CRSF : PROTOCOL_SBUS;
+    setLuaTextSelectionValue(&luaSerialProtocol, arg);
+    if (ApplyRxSerialProtocol)
+    {
+        ApplyRxSerialProtocol(protocol);
+    }
+}
 
 static char *itoa_dec(uint8_t value, char *str)
 {
@@ -41,6 +86,8 @@ static void registerLuaParameters(void)
 {
     registerLUAParameter(&luaModelNumber, NULL, 0);
     registerLUAParameter(&luaELRSversion, NULL, 0);
+    registerLUAParameter(&luaSerialProtocol, serialProtocolChanged, 0);
+    registerLUAParameter(&luaReboot, rebootCommand, 0);
 }
 
 static int event(void)
@@ -56,6 +103,10 @@ static int event(void)
     }
 
     setLuaStringValue(&luaELRSversion, firmware_menu_version);
+    setLuaTextSelectionValue(
+        &luaSerialProtocol,
+        rxConfig.GetSerialProtocol() == PROTOCOL_SBUS ? 1U : 0U
+    );
     return DURATION_IMMEDIATELY;
 }
 

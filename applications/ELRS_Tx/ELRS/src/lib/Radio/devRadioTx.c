@@ -31,6 +31,7 @@ static void (*tlmWindowDoneCb)(void) = NULL;
 static volatile bool     s_pendingAirRateChange = false;
 static uint8_t           s_pendingAirRateIndex = 0;
 static uint32_t          s_pendingAirRateRestartAtMs = 0;
+static bool              s_pendingResetMspSender = false;
 
 #if SENSI_TEST
 static void queueSensiTestPacket(void)
@@ -126,8 +127,8 @@ void DevRadioTx_RequestAirRateChange(uint8_t newRateIndex)
 
     expresslrs_mod_settings_t *const mod = get_elrs_airRateConfig(newRateIndex);
     if (mod) {
-        DBGLN("[AIRRATE][TX] request idx=%u(%s) interval_us=%lu payload=%u", (unsigned)newRateIndex, airRateIndexToStr(newRateIndex),
-              (unsigned long)mod->interval, (unsigned)mod->PayloadLength);
+        DBGLN("[AIRRATE][TX] request idx=%u(%s) interval_us=%u payload=%u", (unsigned)newRateIndex, airRateIndexToStr(newRateIndex),
+              (unsigned)mod->interval, (unsigned)mod->PayloadLength);
     } else {
         DBGLN("[AIRRATE][TX] request idx=%u(%s) mod=NULL", (unsigned)newRateIndex, airRateIndexToStr(newRateIndex));
     }
@@ -147,7 +148,24 @@ void DevRadioTx_RequestAirRateChange(uint8_t newRateIndex)
 
     s_pendingAirRateIndex = newRateIndex;
     s_pendingAirRateRestartAtMs = millis() + delayMs;
+    s_pendingResetMspSender = true;
     s_pendingAirRateChange = true;
+}
+
+void DevRadioTx_RequestTlmRatioChange(uint8_t previousTlmDenom)
+{
+    const uint32_t intervalUs = ExpressLRS_currAirRate_Modparams ?
+        ExpressLRS_currAirRate_Modparams->interval : 4000u;
+    const uint32_t slotPeriodMs = (intervalUs + 999u) / 1000u;
+    const uint32_t delayMs = MAX(200u, slotPeriodMs * (uint32_t)(previousTlmDenom + 1u));
+
+    s_pendingAirRateIndex = ExpressLRS_currAirRate_Modparams ?
+        ExpressLRS_currAirRate_Modparams->index : 0u;
+    s_pendingAirRateRestartAtMs = millis() + delayMs;
+    s_pendingResetMspSender = false;
+    s_pendingAirRateChange = true;
+    DBGLN("[TLMRATIO][TX] delayed slot restart old_denom=%u delay_ms=%u",
+          (unsigned)previousTlmDenom, (unsigned)delayMs);
 }
 
 static void initialize()
@@ -250,12 +268,13 @@ static int timeout()
     SignalQuality_t signalQuality = {0};
 
     if (s_pendingAirRateChange && (int32_t)(millis() - s_pendingAirRateRestartAtMs) >= 0) {
-        if (MspSender.ResetState) {
+        if (s_pendingResetMspSender && MspSender.ResetState) {
             MspSender.ResetState();
         }
         ExpressLRS_currAirRate_Modparams = get_elrs_airRateConfig(s_pendingAirRateIndex);
         DBGLN("[AIRRATE][TX] restart for idx=%u(%s)", (unsigned)s_pendingAirRateIndex, airRateIndexToStr(s_pendingAirRateIndex));
         txLostSignal = true;
+        s_pendingResetMspSender = false;
         s_pendingAirRateChange = false;
         devicesTriggerEvent();
     }
