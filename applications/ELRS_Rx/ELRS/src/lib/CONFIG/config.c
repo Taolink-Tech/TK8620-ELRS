@@ -176,7 +176,6 @@ void RxConfig_SetPowerOnCounter(uint8_t powerOnCounter)
     if (powerOnCounter == 0)
     {
         erase_power_on_count = true;
-        rxConfig.m_modified = true;
     }
     else
     {

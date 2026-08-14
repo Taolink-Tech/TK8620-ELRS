@@ -5,24 +5,33 @@
 #include "helpers.h"
 #include "logging.h"
 #include "tk86xx_api.h"
+#include "unified_config.h"
 
 extern SerialIO_t serialIO;
 static volatile uint16_t s_rx_wr = 0;
 static volatile uint16_t s_rx_rd = 0;
 static uint8_t sRxDataBuf[defaultMaxSerialWriteSize];
 
+static void SerialIO_BufferByte(uint8_t byte)
+{
+    uint16_t next = (uint16_t)((s_rx_wr + 1) % defaultMaxSerialWriteSize);
+    if (next == s_rx_rd) {
+        s_rx_rd = (uint16_t)((s_rx_rd + 1) % defaultMaxSerialWriteSize);
+    }
+    sRxDataBuf[s_rx_wr] = byte;
+    s_rx_wr = next;
+}
+
 /* UART RX callback: cache bytes into the ring buffer only. */
 RAMCODE_SECTION void SerialIO_UartRxCallback(uint8_t *data, uint8_t len)
 {
+#if ELRS_UNIFIED
+    UnifiedConfig_FilterBytes(data, len, SerialIO_BufferByte);
+#else
     for (uint8_t i = 0; i < len; i++) {
-        uint16_t next = (uint16_t)((s_rx_wr + 1) % defaultMaxSerialWriteSize);
-        if (next == s_rx_rd) {
-            /* Drop the oldest byte when the ring buffer overflows. */
-            s_rx_rd = (uint16_t)((s_rx_rd + 1) % defaultMaxSerialWriteSize);
-        }
-        sRxDataBuf[s_rx_wr] = data[i];
-        s_rx_wr = next;
+        SerialIO_BufferByte(data[i]);
     }
+#endif
 }
 
 static int SerialIO_getMaxSerialWriteSize(void)

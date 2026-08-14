@@ -33,19 +33,30 @@
 #include "dynpower.h"
 #include "handset.h"
 #include "rx_ota_sender.h"
+#include "airport.h"
+#include "unified_config.h"
 
 #define BindingSpamAmount 25
 // Rate changes have no receiver acknowledgement, so cover low-LQ links with a longer SYNC burst.
 #define syncSpamAmount 100
 #define syncSpamAmountAfterRateChange 10
 
-device_affinity_t ui_devices[] = {
+#if ELRS_HAS_AIRPORT
+static device_affinity_t airport_ui_devices[] = {
+    {&ratioTxDevice, 0},
+    {&LED_device, 0},
+    {&Button_device, 1},
+};
+#endif
+#if !ELRS_AIRPORT
+static device_affinity_t rc_ui_devices[] = {
     {&Handset_device, 0},
     {&ratioTxDevice, 0},
     {&LED_device, 0}, // LED_device is defined in devHandset.h
     {&LUA_TxDevice, 0},
     {&Button_device, 1},
 };
+#endif
 
 ELRS_EEPROM_t eeprom;
 TxConfig_t txConfig;
@@ -64,12 +75,59 @@ static bool commitInProgress = false;
 static uint32_t SyncPacketLastSent = 0;
 uint32_t rfModeLastChangedMS = 0;
 static uint32_t lastLostMillis;
+#if !ELRS_AIRPORT
 static enum { stbIdle, stbRequested, stbBoosting } syncTelemBoostState = stbIdle;
+#endif
 static bool DownlinkTlmReceivedThisWindow = false;
 static bool TxPayloadPending = false;
 static bool NextPacketIsMspData = false;
 static bool RxOtaModeRequested = false;
 static bool RxOtaModeWasActive = false;
+static bool txRebootRequested = false;
+
+#if ELRS_HAS_AIRPORT
+static AirportFifo_t AirportUartToRf;
+static AirportFifo_t AirportRfToUart;
+
+#if ELRS_UNIFIED
+RAMCODE_SECTION static void AirportBufferUartByte(uint8_t byte)
+{
+  (void)AirportFifo_PushBytes(&AirportUartToRf, &byte, 1U);
+}
+#endif
+
+RAMCODE_SECTION static void AirportUartRxCallback(uint8_t *data, uint8_t len)
+{
+#if ELRS_UNIFIED
+  UnifiedConfig_FilterBytes(data, len, AirportBufferUartByte);
+#else
+  AirportFifo_PushBytes(&AirportUartToRf, data, len);
+#endif
+}
+
+static void AirportFlushUartOutput(void)
+{
+  uint8_t data[AIRPORT_OTA_MAX_PAYLOAD];
+  uint16_t count = AirportFifo_PopBytes(&AirportRfToUart, data, sizeof(data));
+  if (count != 0U) {
+    (void)Tk86xxSerialWrite(data, count);
+  }
+}
+#endif
+
+static void UnifiedStopNormalOperation(void)
+{
+  UnifiedConfig_SetLoggingEnabled(false);
+  DevRadioTx_Stop();
+  TxPayloadPending = false;
+  connectionState = serialUpdate;
+  if (LED_device.event != NULL) (void)LED_device.event();
+}
+
+static void UnifiedRequestReboot(void)
+{
+  txRebootRequested = true;
+}
 
 static void SetRFLinkRate(uint8_t index);
 
@@ -345,7 +403,9 @@ static void LinkStatsFromOta(OTA_LinkStats_s * const ls)
 static bool ProcessTLMpacket(uint8_t *data, uint16_t data_len, SignalQuality_t *signalQuality)
 {
   const uint32_t now = millis();
+#if !ELRS_AIRPORT
   const bool telemetryConfirmBefore = TelemetryReceiver.GetCurrentConfirm();
+#endif
 #if SENSI_TEST
   LastTLMpacketRecvMillis = now;
   lastLostMillis = now + 10 * 1000;
@@ -378,6 +438,17 @@ static bool ProcessTLMpacket(uint8_t *data, uint16_t data_len, SignalQuality_t *
   CRSF_GetLinkStatistics()->crsfLinkStatistics.downlink_RSSI_1 = signalQuality->rssi;
   CRSF_GetLinkStatistics()->downlink_RSSI_2 = 0;
 
+#if ELRS_HAS_AIRPORT
+  if (UnifiedConfig_IsAirport()) {
+    if (otaPktPtr->full.tlm_dl.containsLinkStats) {
+      LinkStatsFromOta(&otaPktPtr->full.tlm_dl.ul_link_stats.stats);
+    } else {
+      (void)OtaUnpackAirportData(otaPktPtr, &AirportRfToUart);
+    }
+    return true;
+  }
+#endif
+#if !ELRS_AIRPORT
   // Full res mode
   if (OtaIsFullRes)
   {
@@ -419,6 +490,7 @@ static bool ProcessTLMpacket(uint8_t *data, uint16_t data_len, SignalQuality_t *
   {
     TelemetryConfirmPending = true;
   }
+#endif
 
   return true;
 }
@@ -459,13 +531,18 @@ static void DownlinkTlmWindowDone(void)
   DownlinkTlmReceivedThisWindow = false;
 }
 
+static void ClearTxPayloadPending(void)
+{
+  TxPayloadPending = false;
+}
+
 static void TXdoneISR(void)
 {
 //   if (!busyTransmitting)
 //   {
 //     return; // Already finished transmission and do not call HandleFHSS() a second time, which may hop the frequency!
 //   }
-  TxPayloadPending = false;
+  ClearTxPayloadPending();
 
 //   if (connectionState != awaitingModelId)
 //   {
@@ -487,6 +564,13 @@ static void TXdoneISR(void)
 
 static expresslrs_tlm_ratio_e UpdateTlmRatioEffective()
 {
+#if ELRS_HAS_AIRPORT
+  if (UnifiedConfig_IsAirport()) {
+    ExpressLRS_currTlmDenom = TLMratioEnumToValue(TLM_RATIO_1_2);
+    return TLM_RATIO_1_2;
+  }
+#endif
+#if !ELRS_AIRPORT
   expresslrs_tlm_ratio_e ratioConfigured = (expresslrs_tlm_ratio_e)txConfig.GetTlm();
   // DBGLN("ratioConfigured = %u", ratioConfigured);
   // default is suggested rate for TLM_RATIO_STD/TLM_RATIO_DISARMED
@@ -548,12 +632,17 @@ static expresslrs_tlm_ratio_e UpdateTlmRatioEffective()
   }
 
   return retVal;
+#else
+  return TLM_RATIO_1_2;
+#endif
 }
 
 static void GenerateSyncPacketData(OTA_Sync_s * const syncPtr)
 {
-  const uint8_t SwitchEncMode = txConfig.GetSwitchMode();
-  const uint8_t Index = (syncSpamCounter) ? txConfig.GetRate() : ExpressLRS_currAirRate_Modparams->index;
+  const bool airportMode = UnifiedConfig_IsAirport();
+  const uint8_t SwitchEncMode = airportMode ? smWideOr8ch : txConfig.GetSwitchMode();
+  const uint8_t Index = airportMode ? ExpressLRS_currAirRate_Modparams->index :
+    ((syncSpamCounter) ? txConfig.GetRate() : ExpressLRS_currAirRate_Modparams->index);
 
   if (syncSpamCounter)
     --syncSpamCounter;
@@ -625,9 +714,10 @@ static void SendRCdataToRF(bool isRcData)
     static uint32_t syncPacketCount = 0;
     //   static uint8_t syncSlot;
 
-  const bool isTlmDisarmed = txConfig.GetTlm() == TLM_RATIO_DISARMED;
+  const bool airportMode = UnifiedConfig_IsAirport();
+  const bool isTlmDisarmed = airportMode ? false : (txConfig.GetTlm() == TLM_RATIO_DISARMED);
   uint32_t SyncInterval = (connectionState == connected && !isTlmDisarmed) ? ExpressLRS_currAirRate_RFperfParams->SyncPktIntervalConnected : ExpressLRS_currAirRate_RFperfParams->SyncPktIntervalDisconnected;
-  const bool armed = (handset.IsArmed != NULL) ? handset.IsArmed() : false;
+  const bool armed = airportMode ? false : ((handset.IsArmed != NULL) ? handset.IsArmed() : false);
   bool skipSync = InBindingMode ||
     // TLM_RATIO_DISARMED keeps sending sync packets even when armed until the RX stops sending telemetry and the TLM=Off has taken effect
     (isTlmDisarmed && armed && (ExpressLRS_currTlmDenom == 1));
@@ -663,6 +753,16 @@ static void SendRCdataToRF(bool isRcData)
     }
     else
     {
+#if ELRS_HAS_AIRPORT
+        if (airportMode && !InBindingMode)
+        {
+            syncPacketCount++;
+            OtaPackAirportData(&otaPkt, &AirportUartToRf);
+            OtaGeneratePacketCrc(&otaPkt);
+            QueueTxPayload((uint8_t *)&otaPkt.full.airport);
+        }
+        else
+#endif
         if (MspSender.IsActive() && (NextPacketIsMspData || InBindingMode))
         {
             otaPkt.std.type = PACKET_TYPE_MSPDATA;
@@ -698,6 +798,7 @@ static void SendRCdataToRF(bool isRcData)
     }
 }
 
+#if !ELRS_AIRPORT
 static void ModelUpdateReq(void)
 {
   // Force synspam with the current rate parameters in case already have a connection established
@@ -717,6 +818,7 @@ static void ModelUpdateReq(void)
     connectionState = disconnected;
   }
 }
+#endif
 
 static void setup(void)
 {
@@ -724,6 +826,25 @@ static void setup(void)
 
     if (setupHardwareFromOptions())
     {
+        UnifiedConfig_Init(UNIFIED_ROLE_TX, firmware_menu_version, firmware_build_id,
+                           UnifiedStopNormalOperation, UnifiedRequestReboot);
+#if ELRS_UNIFIED
+        UnifiedConfig_StartBootProbe();
+        const uint32_t probeStarted = millis();
+        while (!UnifiedConfig_IsSessionActive() && (millis() - probeStarted) < 90U) {
+            UnifiedConfig_Update(millis());
+        }
+        UnifiedConfig_EndBootProbe();
+        if (UnifiedConfig_IsSessionActive()) {
+            connectionState = serialUpdate;
+            if (LED_device.initialize != NULL) LED_device.initialize();
+            if (LED_device.start != NULL) (void)LED_device.start();
+            if (LED_device.event != NULL) (void)LED_device.event();
+            wdt_init(&wdt_param);
+            wdt_enable();
+            return;
+        }
+#endif
         TxConfig_Init(&txConfig);
         ELRS_EEPROM_Init(&eeprom);
 
@@ -742,25 +863,45 @@ static void setup(void)
             POWERMGNT_setPower((PowerLevels_e)txConfig.GetPower());
         }
 
-        #if defined(USE_SBUS_PROTOCOL) || defined(USE_INVERTED_SBUS_PROTOCOL)
-        Tk86xxSerialConfig serialConfig = {
+#if ELRS_HAS_AIRPORT
+        if (UnifiedConfig_IsAirport()) {
+          Tk86xxSerialConfig serialConfig = {
+            .baudRate = AIRPORT_UART_BAUD,
+            .wordLength = TK86XX_SERIAL_WORD_LENGTH_8B,
+            .parity = TK86XX_SERIAL_PARITY_NONE,
+            .stopBits = TK86XX_SERIAL_STOP_BITS_1,
+            .duplex = TK86XX_SERIAL_DUPLEX_FULL,
+        };
+          Tk86xxSerialInit(&serialConfig);
+          AirportFifo_Reset(&AirportUartToRf);
+          AirportFifo_Reset(&AirportRfToUart);
+          Tk86xxSerialRegisterRxCallback(AirportUartRxCallback);
+        } else
+#endif
+#if !ELRS_AIRPORT
+        {
+#if defined(USE_SBUS_PROTOCOL) || defined(USE_INVERTED_SBUS_PROTOCOL)
+          Tk86xxSerialConfig serialConfig = {
             .baudRate = 100000,
             .wordLength = TK86XX_SERIAL_WORD_LENGTH_8B,
             .parity = TK86XX_SERIAL_PARITY_EVEN,
             .stopBits = TK86XX_SERIAL_STOP_BITS_2,
             .duplex = TK86XX_SERIAL_DUPLEX_HALF,
         };
-        Tk86xxSerialInit(&serialConfig);
-        #else
-        Tk86xxSerialConfig serialConfig = {
+          Tk86xxSerialInit(&serialConfig);
+#else
+          Tk86xxSerialConfig serialConfig = {
             .baudRate = crsfSerialPortBaudEnumToBaud((crsf_serial_baud_e)txConfig.GetCrsfSerialBaudEnum()),
             .wordLength = TK86XX_SERIAL_WORD_LENGTH_8B,
             .parity = TK86XX_SERIAL_PARITY_NONE,
             .stopBits = TK86XX_SERIAL_STOP_BITS_1,
             .duplex = TK86XX_SERIAL_DUPLEX_HALF,
         };
-        Tk86xxSerialInit(&serialConfig);
-        #endif
+          Tk86xxSerialInit(&serialConfig);
+#endif
+        }
+#endif
+        UnifiedConfig_SetLoggingEnabled(!UnifiedConfig_IsAirport());
         DBGLN("ELRS TX %s", firmware_build_id);
 #if SENSI_TEST
 #if SENSI_TEST_PROFILE
@@ -772,12 +913,35 @@ static void setup(void)
 
         StubbornReceiver_Init(&TelemetryReceiver);
         StubbornSender_Init(&MspSender);
-        devHandset_RegisterSendRCdataToRF(SendRCdataToRF);
+#if !ELRS_AIRPORT
+        if (!UnifiedConfig_IsAirport()) {
+          devHandset_RegisterSendRCdataToRF(SendRCdataToRF);
+        }
+#endif
         setupBindingFromConfig();
         FHSSrandomiseFHSSsequence(uidMacSeedGet());
-        ChangeRadioParams();
+#if ELRS_HAS_AIRPORT
+        if (UnifiedConfig_IsAirport()) {
+          SetRFLinkRate(AIRPORT_RF_RATE);
+          ExpressLRS_currTlmDenom = TLMratioEnumToValue(TLM_RATIO_1_2);
+        } else
+#endif
+#if !ELRS_AIRPORT
+        {
+          ChangeRadioParams();
+        }
+#endif
         // Register the devices with the framework
-        devicesRegister(ui_devices, ARRAY_SIZE(ui_devices));
+#if ELRS_HAS_AIRPORT
+        if (UnifiedConfig_IsAirport()) {
+          devicesRegister(airport_ui_devices, ARRAY_SIZE(airport_ui_devices));
+        } else
+#endif
+#if !ELRS_AIRPORT
+        {
+          devicesRegister(rc_ui_devices, ARRAY_SIZE(rc_ui_devices));
+        }
+#endif
         // Initialise the devices
         devicesInit();
         DBGLN("Initialised devices");
@@ -788,12 +952,15 @@ static void setup(void)
 
         DevRadioTx_RegisterRxDoneCb(RXdoneISR);
         DevRadioTx_RegisterTxDoneCb(TXdoneISR);
+        DevRadioTx_RegisterTxAbortCb(ClearTxPayloadPending);
         DevRadioTx_RegisterTlmWindowDoneCb(DownlinkTlmWindowDone);
 
-        if (handset.registerCallbacks)
+#if !ELRS_AIRPORT
+        if (!UnifiedConfig_IsAirport() && handset.registerCallbacks)
         {
           handset.registerCallbacks(NULL, NULL, ModelUpdateReq, EnterBindingModeSafely);
         }
+#endif
 
         DBGLN("ExpressLRS TX Module Booted...");
 
@@ -854,8 +1021,18 @@ static void ExitBindingMode()
   OtaUpdateCrcInitFromUid();
   InBindingMode = false; // Clear binding mode before SetRFLinkRate() for correct IQ
 
-  SetRFLinkRate(txConfig.GetRate()); //return to original rate
-  ExpressLRS_currTlmDenom = TLMratioEnumToValue(ExpressLRS_currAirRate_Modparams->TLMinterval);
+#if ELRS_HAS_AIRPORT
+  if (UnifiedConfig_IsAirport()) {
+    SetRFLinkRate(AIRPORT_RF_RATE);
+    ExpressLRS_currTlmDenom = TLMratioEnumToValue(TLM_RATIO_1_2);
+  } else
+#endif
+#if !ELRS_AIRPORT
+  {
+    SetRFLinkRate(txConfig.GetRate()); //return to original rate
+    ExpressLRS_currTlmDenom = TLMratioEnumToValue(ExpressLRS_currAirRate_Modparams->TLMinterval);
+  }
+#endif
 
   DBGLN("Exiting binding mode");
   devicesTriggerEvent();
@@ -961,7 +1138,21 @@ static void loop(void)
 {
   uint32_t now = millis();
 
+  UnifiedConfig_Update(now);
+  if (txRebootRequested) {
+    return;
+  }
   wdt_feed();
+  if (UnifiedConfig_IsSessionActive()) {
+    return;
+  }
+
+#if ELRS_HAS_AIRPORT
+  if (UnifiedConfig_IsAirport()) {
+    AirportFlushUartOutput();
+    SendRCdataToRF(false);
+  }
+#endif
 
   if (RxOtaModeRequested)
   {

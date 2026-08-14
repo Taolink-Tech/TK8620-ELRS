@@ -11,6 +11,7 @@
 #include "logging.h"
 #include "tk86xx_platform.h"
 #include "tk86xx_api.h"
+#include "unified_config.h"
 
 #define SBUS_FRAME_LEN     25u
 #define SBUS_HEADER        0x0Fu
@@ -33,20 +34,28 @@ static uint8_t sParseLen = 0;
 
 static uint32_t sLastGoodFrameUs = 0;
 
+static void SbusBufferByte(uint8_t byte)
+{
+    uint16_t next = (uint16_t)(s_rx_wr + 1u);
+    if (next >= (uint16_t)SBUS_RX_BUF_SIZE) next = 0;
+    if (next == s_rx_rd) {
+        uint16_t rd = (uint16_t)(s_rx_rd + 1u);
+        if (rd >= (uint16_t)SBUS_RX_BUF_SIZE) rd = 0;
+        s_rx_rd = rd;
+    }
+    sRxDataBuf[s_rx_wr] = byte;
+    s_rx_wr = next;
+}
+
 RAMCODE_SECTION static void Sbus_UartRxCallback(uint8_t *data, uint8_t len)
 {
+#if ELRS_UNIFIED
+    UnifiedConfig_FilterBytes(data, len, SbusBufferByte);
+#else
     for (uint8_t i = 0; i < len; i++) {
-        uint16_t next = (uint16_t)(s_rx_wr + 1u);
-        if (next >= (uint16_t)SBUS_RX_BUF_SIZE) next = 0;
-        if (next == s_rx_rd) {
-            // overflow: drop oldest
-            uint16_t rd = (uint16_t)(s_rx_rd + 1u);
-            if (rd >= (uint16_t)SBUS_RX_BUF_SIZE) rd = 0;
-            s_rx_rd = rd;
-        }
-        sRxDataBuf[s_rx_wr] = data[i];
-        s_rx_wr = next;
+        SbusBufferByte(data[i]);
     }
+#endif
 }
 
 RAMCODE_SECTION static uint16_t SbusReadBytes(uint8_t *dest, uint16_t maxlen)

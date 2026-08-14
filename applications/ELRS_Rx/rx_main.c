@@ -34,8 +34,21 @@
 #include "LowPassFilter.h"
 #include "MeanAccumulator.h"
 #include "devAnalogVbat.h"
+#include "airport.h"
+#include "unified_config.h"
 
-device_affinity_t ui_devices[] = {
+#if ELRS_HAS_AIRPORT
+static device_affinity_t airport_ui_devices[] = {
+    {&ratioRxDevice, 0},
+    {&LED_device, 0},
+    {&Button_device, 0},
+#if defined(USE_ANALOG_VBAT)
+    {&AnalogVbat_device, 0},
+#endif
+};
+#endif
+#if !ELRS_AIRPORT
+static device_affinity_t rc_ui_devices[] = {
     {&Serial0_device, 1},
     {&ratioRxDevice, 0},
     {&LED_device, 0},
@@ -45,6 +58,7 @@ device_affinity_t ui_devices[] = {
 #endif
     {&LUA_device, 0},
 };
+#endif
 
 SerialIO_t serialIO;
 ELRS_EEPROM_t eeprom;
@@ -65,6 +79,49 @@ MeanAccumulator_t SnrMean;
 static bool telemBurstValid;
 static uint8_t ExpressLRS_nextAirRateIndex;
 static int8_t SwitchModePending = 0;
+static bool rxRebootRequested;
+#if ELRS_HAS_AIRPORT
+static AirportFifo_t AirportUartToRf;
+static AirportFifo_t AirportRfToUart;
+
+#if ELRS_UNIFIED
+RAMCODE_SECTION static void AirportBufferUartByte(uint8_t byte)
+{
+    (void)AirportFifo_PushBytes(&AirportUartToRf, &byte, 1U);
+}
+#endif
+
+RAMCODE_SECTION static void AirportUartRxCallback(uint8_t *data, uint8_t len)
+{
+#if ELRS_UNIFIED
+    UnifiedConfig_FilterBytes(data, len, AirportBufferUartByte);
+#else
+    AirportFifo_PushBytes(&AirportUartToRf, data, len);
+#endif
+}
+
+static void AirportFlushUartOutput(void)
+{
+    uint8_t data[AIRPORT_OTA_MAX_PAYLOAD];
+    uint16_t count = AirportFifo_PopBytes(&AirportRfToUart, data, sizeof(data));
+    if (count != 0U) {
+        (void)Tk86xxSerialWrite(data, count);
+    }
+}
+#endif
+
+static void UnifiedStopNormalOperation(void)
+{
+    UnifiedConfig_SetLoggingEnabled(false);
+    DevRadioRx_Stop();
+    connectionState = serialUpdate;
+    if (LED_device.event != NULL) (void)LED_device.event();
+}
+
+static void UnifiedRequestReboot(void)
+{
+    rxRebootRequested = true;
+}
 LPF_t LPF_UplinkRSSI0 = {
     .Beta = 5,
     .FP_Shift = 5,
@@ -103,9 +160,9 @@ static void PrintSensiStats(SignalQuality_t *signalQuality, bool hasPayload)
 
 #define RX_LUA_VERSION_FIELD_ID               2U
 // Stubborn transport guarantees delivery; do not occupy it with periodic version pushes.
+#if !ELRS_AIRPORT
 static bool rxVersionPushQueued;
-static bool rxRebootRequested;
-
+#endif
 void RequestRxReboot(void)
 {
     rxRebootRequested = true;
@@ -343,7 +400,9 @@ static void TentativeConnection(unsigned long now)
     // RFmodeLastCycled = now; // give another 3 sec for lock to occur
 
     // Use this rate as the initial rate next time if we connected on it
+#if !ELRS_AIRPORT
     rxConfig.SetRateInitialIdx(ExpressLRS_nextAirRateIndex);
+#endif
     // And stop counting toward binding mode
     // if (config.GetPowerOnCounter() != 0)
     // {
@@ -458,6 +517,11 @@ static bool IsUplinkPacketCandidate(OTA_Packet_s const * const otaPktPtr)
     case PACKET_TYPE_MSPDATA:
         return InBindingMode || (connectionState != disconnected);
 
+#if ELRS_HAS_AIRPORT
+    case PACKET_TYPE_TLM:
+        return UnifiedConfig_IsAirport();
+#endif
+
     default:
         return false;
     }
@@ -505,6 +569,20 @@ static bool ProcessRFPacket(SignalQuality_t *signalQuality)
         ProcessRfPacket_SYNC(now, OtaIsFullRes ? &otaPktPtr->full.sync.sync : &otaPktPtr->std.sync);
             // && !InBindingMode;
         break;
+#if ELRS_HAS_AIRPORT
+    case PACKET_TYPE_TLM:
+        if (!UnifiedConfig_IsAirport()) {
+            return false;
+        }
+        if (connectionState != connected) {
+            AirportFifo_Reset(&AirportUartToRf);
+            AirportFifo_Reset(&AirportRfToUart);
+            connectionState = connected;
+            devicesTriggerEvent();
+        }
+        (void)OtaUnpackAirportData(otaPktPtr, &AirportRfToUart);
+        break;
+#endif
     default:
         break;
     }
@@ -591,7 +669,13 @@ static bool HandleSendTelemetryResponse(void)
     otaPkt.std.type = PACKET_TYPE_TLM;
 
     bool tlmQueued = false;
-    tlmQueued = TelemetrySender.IsActive();
+    tlmQueued = UnifiedConfig_IsAirport()
+#if ELRS_HAS_AIRPORT
+        ? (AirportFifo_Size(&AirportUartToRf) != 0U)
+#else
+        ? false
+#endif
+        : TelemetrySender.IsActive();
 
     if (NextTelemetryType == ELRS_TELEMETRY_TYPE_LINK || !tlmQueued)
     {
@@ -602,7 +686,9 @@ static bool HandleSendTelemetryResponse(void)
             ls = &otaPkt.full.tlm_dl.ul_link_stats.stats;
             // Include some advanced telemetry in the extra space
             // Note the use of `ul_link_stats.payload` vs just `payload`
-            otaPkt.full.tlm_dl.packageIndex = TelemetrySender.GetCurrentPayload(otaPkt.full.tlm_dl.ul_link_stats.payload, sizeof(otaPkt.full.tlm_dl.ul_link_stats.payload));
+            if (!UnifiedConfig_IsAirport()) {
+                otaPkt.full.tlm_dl.packageIndex = TelemetrySender.GetCurrentPayload(otaPkt.full.tlm_dl.ul_link_stats.payload, sizeof(otaPkt.full.tlm_dl.ul_link_stats.payload));
+            }
         }
         else
         {
@@ -628,6 +714,11 @@ static bool HandleSendTelemetryResponse(void)
             NextTelemetryType = ELRS_TELEMETRY_TYPE_LINK;
         }
 
+#if ELRS_HAS_AIRPORT
+        if (UnifiedConfig_IsAirport()) {
+            OtaPackAirportData(&otaPkt, &AirportUartToRf);
+        } else
+#endif
         if (TelemetrySender.IsActive())
         {
             if (OtaIsFullRes)
@@ -654,6 +745,7 @@ static void TXdoneISR(void)
     HandleSendTelemetryResponse();
 }
 
+#if !ELRS_AIRPORT
 static void ClearPowerOnCounter(void)
 {
     if (/*connectionState != connected &&*/ rxConfig.GetPowerOnCounter() != 0)
@@ -683,6 +775,7 @@ static void setupConfigAndPocCheck(void)
     // // Set a deferred function to clear the power on counter if the RX has been running for more than 2s
     deferExecutionMillis(2000, ClearPowerOnCounter);
 }
+#endif
 
 static void EnterBindingMode()
 {
@@ -756,6 +849,23 @@ static void setupBindingFromConfig()
 
 static void setupSerial()
 {
+#if ELRS_HAS_AIRPORT
+    if (UnifiedConfig_IsAirport()) {
+      Tk86xxSerialConfig serialConfig = {
+        .baudRate = AIRPORT_UART_BAUD,
+        .wordLength = TK86XX_SERIAL_WORD_LENGTH_8B,
+        .parity = TK86XX_SERIAL_PARITY_NONE,
+        .stopBits = TK86XX_SERIAL_STOP_BITS_1,
+        .duplex = TK86XX_SERIAL_DUPLEX_FULL,
+    };
+      Tk86xxSerialInit(&serialConfig);
+      AirportFifo_Reset(&AirportUartToRf);
+      AirportFifo_Reset(&AirportRfToUart);
+      Tk86xxSerialRegisterRxCallback(AirportUartRxCallback);
+      return;
+    }
+#endif
+#if !ELRS_AIRPORT
     eSerialProtocol_e proto = PROTOCOL_CRSF;
     if (rxConfig.GetSerialProtocol)
     {
@@ -792,6 +902,7 @@ static void setupSerial()
     Tk86xxSerialInit(&serialConfig);
     SerialIO_Init(&serialIO);
     SerialIO_SetProtocol(&serialIO, proto);
+#endif
 }
 
 void ApplyRxSerialProtocol(eSerialProtocol_e protocol)
@@ -830,10 +941,12 @@ static void setupRadio()
     DevRadioRx_RegisterRxSlotResultCb(RXdoneISR);
     DevRadioRx_RegisterTxDoneCb(TXdoneISR);
 
-    scanIndex = rxConfig.GetRateInitialIdx();
+    scanIndex = UnifiedConfig_IsAirport() ? AIRPORT_RF_RATE : rxConfig.GetRateInitialIdx();
     DBGLN("scanIndex = %u", scanIndex);
     SetRFLinkRate(scanIndex, false);
-    ExpressLRS_currTlmDenom  = TLMratioEnumToValue(ExpressLRS_currAirRate_Modparams->TLMinterval);
+    ExpressLRS_currTlmDenom = UnifiedConfig_IsAirport()
+        ? TLMratioEnumToValue(TLM_RATIO_1_2)
+        : TLMratioEnumToValue(ExpressLRS_currAirRate_Modparams->TLMinterval);
     // Start slow on the selected rate to give it the best chance
     // to connect before beginning rate cycling
     // RFmodeCycleMultiplier = RFmodeCycleMultiplierSlow / 2;
@@ -846,16 +959,37 @@ static void setup(void)
     hardwareConfigured = options_init();
 
     if (hardwareConfigured) {
+        UnifiedConfig_Init(UNIFIED_ROLE_RX, firmware_menu_version, firmware_build_id,
+                           UnifiedStopNormalOperation, UnifiedRequestReboot);
+#if ELRS_UNIFIED
+        UnifiedConfig_StartBootProbe();
+        const uint32_t probeStarted = millis();
+        while (!UnifiedConfig_IsSessionActive() && (millis() - probeStarted) < 90U) {
+            UnifiedConfig_Update(millis());
+        }
+        UnifiedConfig_EndBootProbe();
+        if (UnifiedConfig_IsSessionActive()) {
+            connectionState = serialUpdate;
+            if (LED_device.initialize != NULL) LED_device.initialize();
+            if (LED_device.start != NULL) (void)LED_device.start();
+            if (LED_device.event != NULL) (void)LED_device.event();
+            eclic_priority_group_set(ECLIC_PRIGROUP_LEVEL3_PRIO0);
+            wdt_init(&wdt_param);
+            wdt_enable();
+            return;
+        }
+#endif
         // default to CRSF protocol and the compiled baud rate
         // serialBaud = firmwareOptions.uart_baud;
         Tk86xxSerialConfig serialConfig = {
-            .baudRate = 420000,
+            .baudRate = UnifiedConfig_IsAirport() ? AIRPORT_UART_BAUD : 420000U,
             .wordLength = TK86XX_SERIAL_WORD_LENGTH_8B,
             .parity = TK86XX_SERIAL_PARITY_NONE,
             .stopBits = TK86XX_SERIAL_STOP_BITS_1,
             .duplex = TK86XX_SERIAL_DUPLEX_FULL,
         };
         Tk86xxSerialInit(&serialConfig);
+        UnifiedConfig_SetLoggingEnabled(!UnifiedConfig_IsAirport());
         DBGLN("ELRS RX %s", firmware_build_id);
 #if SENSI_TEST
 #if SENSI_TEST_PROFILE
@@ -878,7 +1012,24 @@ static void setup(void)
         // but configurable I2C pins for PWM RX needs config loaded first
 
         // Init EEPROM and load config, checking powerup count
-        setupConfigAndPocCheck();
+        if (UnifiedConfig_IsAirport()) {
+          ELRS_EEPROM_Init(&eeprom);
+          RxConfig_Init(&rxConfig);
+          rxConfig.SetStorageProvider(&eeprom);
+#ifndef SIM_TUBE
+          rxConfig.Load();
+#endif
+#if ELRS_UNIFIED
+          // RC's rapid-power-cycle bind counter is not an AirPort control and
+          // must not force a bound receiver onto the 50 Hz binding rate.
+          ClearPowerOnCounter();
+#endif
+        }
+#if !ELRS_AIRPORT
+        else {
+          setupConfigAndPocCheck();
+        }
+#endif
 
         // #if defined(OPT_HAS_SERVO_OUTPUT)
         // // If serial is not already defined, then see if there is serial pin configured in the PWM configuration
@@ -896,7 +1047,16 @@ static void setup(void)
         // }
         // #endif
         setupSerial();
-        devicesRegister(ui_devices, ARRAY_SIZE(ui_devices));
+#if ELRS_HAS_AIRPORT
+        if (UnifiedConfig_IsAirport()) {
+            devicesRegister(airport_ui_devices, ARRAY_SIZE(airport_ui_devices));
+        } else
+#endif
+#if !ELRS_AIRPORT
+        {
+            devicesRegister(rc_ui_devices, ARRAY_SIZE(rc_ui_devices));
+        }
+#endif
         Telemetry_Init(&telemetry);
         telemetry.ResetState();
         StubbornSender_Init(&TelemetrySender);
@@ -943,6 +1103,12 @@ static void LostConnection(bool resumeRx)
     connectionState = disconnected; //set lost connection
     UplinkLqTracker_Reset(s_uplinkLqTracker.windowSize);
     CRSF_GetLinkStatistics()->crsfLinkStatistics.uplink_Link_quality = 0;
+#if ELRS_HAS_AIRPORT
+    if (UnifiedConfig_IsAirport()) {
+        AirportFifo_Reset(&AirportUartToRf);
+        AirportFifo_Reset(&AirportRfToUart);
+    }
+#endif
     // RXtimerState = tim_disconnected;
     // hwTimer::resetFreqOffset();
     // PfdPrevRawOffset = 0;
@@ -962,8 +1128,14 @@ static void LostConnection(bool resumeRx)
         //     while(micros() - PFDloop.getIntEventTime() > 250); // time it just after the tock()
         //     hwTimer::stop();
         // }
-        SetRFLinkRate(ExpressLRS_nextAirRateIndex, false); // also sets to initialFreq
-        DevRadioRx_RequestAirRateChange(ExpressLRS_nextAirRateIndex);
+        if (UnifiedConfig_IsAirport()) {
+            SetRFLinkRate(AIRPORT_RF_RATE, false);
+            ExpressLRS_currTlmDenom = TLMratioEnumToValue(TLM_RATIO_1_2);
+            DevRadioRx_RequestAirRateChange(AIRPORT_RF_RATE);
+        } else {
+            SetRFLinkRate(ExpressLRS_nextAirRateIndex, false); // also sets to initialFreq
+            DevRadioRx_RequestAirRateChange(ExpressLRS_nextAirRateIndex);
+        }
         devicesTriggerEvent();
         // If not resumRx, Radio will be left in SX127x_OPMODE_STANDBY / SX1280_MODE_STDBY_XOSC
         // if (resumeRx)
@@ -1000,10 +1172,12 @@ static void ExitBindingMode()
     // Do this last as LostConnection() will wait for a tock that never comes
     // if we're in binding mode
     InBindingMode = false;
-    scanIndex = rxConfig.GetRateInitialIdx();
+    scanIndex = UnifiedConfig_IsAirport() ? AIRPORT_RF_RATE : rxConfig.GetRateInitialIdx();
     SetRFLinkRate(scanIndex, false);
     DevRadioRx_RequestAirRateChange(scanIndex);
-    ExpressLRS_currTlmDenom = TLMratioEnumToValue(ExpressLRS_currAirRate_Modparams->TLMinterval);
+    ExpressLRS_currTlmDenom = UnifiedConfig_IsAirport()
+        ? TLMratioEnumToValue(TLM_RATIO_1_2)
+        : TLMratioEnumToValue(ExpressLRS_currAirRate_Modparams->TLMinterval);
     DBGLN("Exiting binding mode");
     devicesTriggerEvent();
 }
@@ -1016,7 +1190,7 @@ static void updateBindingMode(unsigned long now)
         ExitBindingMode();
     }
     // If the power on counter is >=3, enter binding, the counter will be reset after 2s
-    else if (!InBindingMode && rxConfig.GetPowerOnCounter() >= 3)
+    else if (!UnifiedConfig_IsAirport() && !InBindingMode && rxConfig.GetPowerOnCounter() >= 3)
     {
         DBGLN("Power on counter >=3, enter binding mode");
         EnterBindingMode();
@@ -1068,7 +1242,9 @@ static void updateTelemetryBurst()
     telemetryBurstMax = TLMBurstMaxForRateRatio(hz, ExpressLRS_currTlmDenom);
 
     // Notify the sender to adjust its expected throughput
+#if !ELRS_AIRPORT
     TelemetrySender.UpdateTelemetryRate(hz, ExpressLRS_currTlmDenom, telemetryBurstMax);
+#endif
 }
 
 void UpdateModelMatch(uint8_t model)
@@ -1083,6 +1259,7 @@ void UpdateModelMatch(uint8_t model)
     }
 }
 
+#if !ELRS_AIRPORT
 static bool HandleRxConfigMspWrite(const uint8_t totalLen)
 {
     if (totalLen < 10U)
@@ -1170,6 +1347,7 @@ static void CheckConfigChangePending()
         devicesTriggerEvent();
     }
 }
+#endif
 
 static void updateSwitchMode()
 {
@@ -1182,6 +1360,7 @@ static void updateSwitchMode()
     SwitchModePending = 0;
 }
 
+#if !ELRS_AIRPORT
 static void queueRxVersionTelemetryIfIdle(void)
 {
     const bool linkReady =
@@ -1211,17 +1390,31 @@ static void queueRxVersionTelemetryIfIdle(void)
     luaParamUpdateReq(CRSF_FRAMETYPE_PARAMETER_READ, RX_LUA_VERSION_FIELD_ID, 0U);
     rxVersionPushQueued = true;
 }
+#endif
 
 static void loop(void)
 {
     unsigned long now = millis();
-    devicesUpdate(now);
-    // Read and process serial traffic, including queued telemetry payloads.
-    handleSerialIO();
-    if (!rxRebootRequested)
-    {
+    UnifiedConfig_Update(now);
+    if (!rxRebootRequested) {
         wdt_feed();
     }
+    if (rxRebootRequested || UnifiedConfig_IsSessionActive()) {
+        return;
+    }
+
+    devicesUpdate(now);
+#if ELRS_HAS_AIRPORT
+    if (UnifiedConfig_IsAirport()) {
+        AirportFlushUartOutput();
+    } else
+#endif
+#if !ELRS_AIRPORT
+    {
+    // Read and process serial traffic, including queued telemetry payloads.
+        handleSerialIO();
+    }
+#endif
     updateBindingMode(now);
     executeDeferredFunction(micros());
     if (connectionState != connectionState_backup)
@@ -1230,13 +1423,16 @@ static void loop(void)
         devicesTriggerEvent();
     }
 
-    if (MspReceiver.HasFinishedData())
-    {
-        MspReceiveComplete();
+#if !ELRS_AIRPORT
+    if (!UnifiedConfig_IsAirport()) {
+        if (MspReceiver.HasFinishedData()) {
+            MspReceiveComplete();
+        }
+        queueRxVersionTelemetryIfIdle();
+        luaHandleUpdateParameter();
+        CheckConfigChangePending();
     }
-    queueRxVersionTelemetryIfIdle();
-    luaHandleUpdateParameter();
-    CheckConfigChangePending();
+#endif
 
     if ((connectionState != disconnected) && (ExpressLRS_currAirRate_Modparams->index != ExpressLRS_nextAirRateIndex))
     {
@@ -1244,11 +1440,14 @@ static void loop(void)
         LostConnection(true);
     }
 
-    uint8_t nextPlayloadSize = 0;
-    if (!TelemetrySender.IsActive() && telemetry.GetNextPayload(&nextPlayloadSize, currentTelemetryPayload))
-    {
-        TelemetrySender.SetDataToTransmit(currentTelemetryPayload, nextPlayloadSize);
+#if !ELRS_AIRPORT
+    if (!UnifiedConfig_IsAirport()) {
+        uint8_t nextPlayloadSize = 0;
+        if (!TelemetrySender.IsActive() && telemetry.GetNextPayload(&nextPlayloadSize, currentTelemetryPayload)) {
+            TelemetrySender.SetDataToTransmit(currentTelemetryPayload, nextPlayloadSize);
+        }
     }
+#endif
 
     updateTelemetryBurst();
     updateSwitchMode();

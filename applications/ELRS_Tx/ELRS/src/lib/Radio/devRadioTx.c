@@ -26,6 +26,7 @@ static bool radioInitFlag = false;
 
 static void (*rxDoneCb)(uint8_t *data, uint16_t data_len, SignalQuality_t *signalQuality) = NULL;
 static void (*txDoneCb)(void) = NULL;
+static void (*txAbortCb)(void) = NULL;
 static void (*tlmWindowDoneCb)(void) = NULL;
 
 static volatile bool     s_pendingAirRateChange = false;
@@ -114,6 +115,11 @@ void DevRadioTx_RegisterTxDoneCb(void (*cb)(void))
     txDoneCb = cb;
 }
 
+void DevRadioTx_RegisterTxAbortCb(void (*cb)(void))
+{
+    txAbortCb = cb;
+}
+
 void DevRadioTx_RegisterTlmWindowDoneCb(void (*cb)(void))
 {
     tlmWindowDoneCb = cb;
@@ -152,6 +158,11 @@ void DevRadioTx_RequestAirRateChange(uint8_t newRateIndex)
     s_pendingAirRateChange = true;
 }
 
+void DevRadioTx_Stop(void)
+{
+    Tk86xxCloseRadio();
+}
+
 void DevRadioTx_RequestTlmRatioChange(uint8_t previousTlmDenom)
 {
     const uint32_t intervalUs = ExpressLRS_currAirRate_Modparams ?
@@ -185,6 +196,7 @@ static void initialize()
     }
     initCfg.rf_pwr = (TxPower)POWERMGNT_getPowerIndBm();
     Tk86xxCloseRadio();
+    if (txAbortCb) txAbortCb();
 
     if ((ret = Tk86xxInit(&initCfg)) == API_SUCCESS) {
         applyTxPowerOffset();

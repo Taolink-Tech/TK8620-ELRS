@@ -1,9 +1,9 @@
 param(
-    [ValidateSet('all', 'rx', 'tx', 'normal', 'sg', 'pair', 'clean', 'help')]
+    [ValidateSet('all', 'rx', 'tx', 'sg', 'pair', 'clean', 'help')]
     [string]$Target = 'all',
 
-    [ValidateSet('normal', 'signal-generator', 'module-pair')]
-    [string]$BuildProfile = 'normal',
+    [ValidateSet('unified', 'signal-generator', 'module-pair')]
+    [string]$BuildProfile = 'unified',
 
     [int]$RssiCompDb = -17
 )
@@ -148,7 +148,8 @@ function Get-ProjectConfig {
     param(
         [string]$Root,
         [ValidateSet('rx', 'tx')]
-        [string]$Kind
+        [string]$Kind,
+        [string]$BuildProfile = 'unified'
     )
 
     switch ($Kind) {
@@ -416,19 +417,33 @@ function Build-Project {
     }
 
     switch ($BuildProfile) {
+        'unified' {
+            $commonArgs += '-DSENSI_TEST=0'
+            $commonArgs += '-DSENSI_TEST_PROFILE=0'
+            $commonArgs += '-DELRS_AIRPORT=0'
+            $commonArgs += '-DELRS_UNIFIED=1'
+            $commonArgs += '-DAIRPORT_UART_BAUD=9600'
+            $commonArgs += '-DAIRPORT_RF_RATE=RATE_TMS_250HZ'
+        }
         'signal-generator' {
             $commonArgs += '-DSENSI_TEST=1'
             $commonArgs += '-DSENSI_TEST_PROFILE=0'
             $commonArgs += '-DSENSI_SLOT_NUM=3'
+            $commonArgs += '-DELRS_AIRPORT=0'
+            $commonArgs += '-DELRS_UNIFIED=0'
         }
         'module-pair' {
             $commonArgs += '-DSENSI_TEST=1'
             $commonArgs += '-DSENSI_TEST_PROFILE=1'
             $commonArgs += '-DSENSI_SLOT_NUM=129'
+            $commonArgs += '-DELRS_AIRPORT=0'
+            $commonArgs += '-DELRS_UNIFIED=0'
         }
         default {
             $commonArgs += '-DSENSI_TEST=0'
             $commonArgs += '-DSENSI_TEST_PROFILE=0'
+            $commonArgs += '-DELRS_AIRPORT=0'
+            $commonArgs += '-DELRS_UNIFIED=0'
         }
     }
 
@@ -521,6 +536,20 @@ function Build-Project {
     }
     Invoke-Checked $codespace @($ram, $Project.Linker)
 
+    if ($BuildProfile -eq 'unified') {
+        $dramUsed = 0
+        foreach ($line in Get-Content -LiteralPath $ram) {
+            if ($line -match '^\s*\[\s*\d+\]\s+\.(?:ram_image|bss|stack)\s+\S+\s+\S+\s+\S+\s+([0-9a-fA-F]+)\s') {
+                $dramUsed += [Convert]::ToInt32($Matches[1], 16)
+            }
+        }
+        $dramFree = 65536 - $dramUsed
+        Write-Step "[$($BuildProfile.ToUpperInvariant()) RAM] used=$dramUsed free=$dramFree"
+        if ($dramFree -lt 4096) {
+            throw "$BuildProfile DRAM safety margin is below 4096 bytes: $dramFree"
+        }
+    }
+
     Write-Step "[DONE] $hex"
 }
 
@@ -530,10 +559,6 @@ $toolsRoot = Join-Path $root 'tools'
 $buildRoot = Join-Path $root 'build'
 
 switch ($Target) {
-    'normal' {
-        $Target = 'all'
-        $BuildProfile = 'normal'
-    }
     'sg' {
         $Target = 'all'
         $BuildProfile = 'signal-generator'
@@ -550,6 +575,7 @@ switch ($Target) {
         Write-Host '  .\build.cmd        Build RX and TX'
         Write-Host '  .\build.cmd rx     Build RX only'
         Write-Host '  .\build.cmd tx     Build TX only'
+        Write-Host '  Production builds are unified RC/AirPort firmware.'
         Write-Host '  .\build.cmd clean  Remove build output'
         exit 0
     }
@@ -585,10 +611,10 @@ Write-Step "[VERSION] $($versionInfo.Version)-tk8620 elrs-3.5.6$commitDisplay"
 Write-Step "[PROFILE] $BuildProfile"
 
 if ($Target -in @('all', 'rx')) {
-    Build-Project -Root $root -Project (Get-ProjectConfig -Root $root -Kind 'rx') -Toolchain $toolchain -SdkRoot $sdkRoot -ToolsRoot $toolsRoot -BuildProfile $BuildProfile -RssiCompDb $RssiCompDb
+    Build-Project -Root $root -Project (Get-ProjectConfig -Root $root -Kind 'rx' -BuildProfile $BuildProfile) -Toolchain $toolchain -SdkRoot $sdkRoot -ToolsRoot $toolsRoot -BuildProfile $BuildProfile -RssiCompDb $RssiCompDb
 }
 
 if ($Target -in @('all', 'tx')) {
-    Build-Project -Root $root -Project (Get-ProjectConfig -Root $root -Kind 'tx') -Toolchain $toolchain -SdkRoot $sdkRoot -ToolsRoot $toolsRoot -BuildProfile $BuildProfile -RssiCompDb $RssiCompDb
+    Build-Project -Root $root -Project (Get-ProjectConfig -Root $root -Kind 'tx' -BuildProfile $BuildProfile) -Toolchain $toolchain -SdkRoot $sdkRoot -ToolsRoot $toolsRoot -BuildProfile $BuildProfile -RssiCompDb $RssiCompDb
 }
 

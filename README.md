@@ -27,6 +27,7 @@ You can use this repository to:
 | Buy a TK8620 ELRS module | [Taobao product page](https://item.taobao.com/item.htm?id=1068476636220) |
 | Choose a module and review purchase notes | [`hardware/PURCHASE.md`](hardware/PURCHASE.md) |
 | Build TX/RX firmware | [Build](#build) |
+| Switch between RC and AirPort | [RC/AirPort Mode](#rcairport-mode) |
 | Flash a TX module | [Flash TX](#flash-tx) |
 | Flash an RX module over UART | [Flash RX](#flash-rx) |
 | Stage RX firmware for wireless update | [Stage RX Firmware For Wireless Update](#stage-rx-firmware-for-wireless-update) |
@@ -136,6 +137,32 @@ Build output:
 - `build/ELRS_Rx/TK8620_ELRS_RX_P.hex`
 - `build/ELRS_Tx/TK8620_ELRS_TX_P.hex`
 
+## RC/AirPort Mode
+
+The same TX and RX firmware supports normal RC operation and AirPort transparent
+serial transmission. Flash and bind both devices before switching modes.
+
+Run the interactive configuration tool:
+
+```powershell
+.\configure.cmd
+```
+
+Select RC, AirPort, or status query, then restart each device when prompted.
+Configure both TX and RX to the same mode. If user parameters were erased during
+flashing, switch to RC and bind the pair again before using AirPort.
+
+In AirPort mode, connect the computer to the TX module's Type-C serial interface
+and connect the external device to the RX module UART TX, RX, and GND pins. Both
+serial ports use `9600 baud, 8 data bits, no parity, 1 stop bit`, normal polarity,
+and full duplex.
+
+AirPort carries a byte stream, not application packet boundaries. It does not
+acknowledge or retransmit lost RF packets. Applications that require complete
+messages must add their own framing, length, sequence, checksum, and retry
+logic. Restore RC operation by running `configure.cmd` and setting both modules
+to RC.
+
 ## Flash TX
 
 Build TX firmware first:
@@ -151,6 +178,8 @@ Connect the TX module UART through a USB-to-UART adapter, then run:
 ```
 
 The script lists detected COM ports and asks you to select the target port.
+TX user settings are preserved by default. Add `-Erase` only when you
+intentionally want to reset them.
 
 ## Flash RX
 
@@ -171,6 +200,8 @@ Connect the RX module UART through a USB-to-UART adapter, then run:
 
 The script lists detected COM ports and asks you to select the RX module port.
 This command flashes the RX module over its UART connection.
+RX user settings and binding are preserved by default. Add `-Erase` only when
+you intentionally want to reset them; the RX must then be bound again.
 
 ## Stage RX Firmware For Wireless Update
 

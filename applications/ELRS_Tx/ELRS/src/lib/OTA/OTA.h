@@ -6,6 +6,7 @@
 // #include "CRSF.h"
 #include "crsf_protocol.h"
 #include "telemetry_protocol.h"
+#include "airport.h"
 // #include "FIFO.h"
 
 #define OTA4_PACKET_SIZE     8U
@@ -190,6 +191,8 @@ void OtaSetFullResNextChannelSet(bool next);
 
 typedef bool (*UnpackChannelData_t)(OTA_Packet_s const * const otaPktPtr, uint32_t *channelData, uint8_t tlmDenom);
 
-// void OtaPackAirportData(OTA_Packet_s * const otaPktPtr, FIFO<AP_MAX_BUF_LEN> *inputBuffer);
-// void OtaUnpackAirportData(OTA_Packet_s const * const otaPktPtr, FIFO<AP_MAX_BUF_LEN> *outputBuffer);
+#if ELRS_HAS_AIRPORT
+uint8_t OtaPackAirportData(OTA_Packet_s *otaPktPtr, AirportFifo_t *inputBuffer);
+bool OtaUnpackAirportData(const OTA_Packet_s *otaPktPtr, AirportFifo_t *outputBuffer);
+#endif
 

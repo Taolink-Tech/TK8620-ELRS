@@ -90,6 +90,11 @@ void DevRadioRx_RegisterTxDoneCb(void (*cb)(void))
     txDoneCb = cb;
 }
 
+void DevRadioRx_Stop(void)
+{
+    Tk86xxCloseRadio();
+}
+
 void DevRadioRx_RequestAirRateChange(uint8_t newRateIndex)
 {
     if (newRateIndex >= RATE_MAX) {

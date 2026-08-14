@@ -74,6 +74,7 @@ RX_OTA_DEFAULT_FREQ = 900320000
 SERIAL_RESET_LOW_MS = 50
 SERIAL_RESET_SETTLE_MS = 20
 AUTO_RESET_HANDSHAKE_TIMEOUT_S = 0.2
+HANDSHAKE_DRAIN_S = 0.05
 
 
 def log(message: str) -> None:
@@ -367,6 +368,11 @@ class Tk8620Bootrom:
             buf.extend(chunk)
 
             if b"ok" in buf:
+                # BootROM may already have queued another TurMass. prompt by
+                # the time it accepts TaoLink.  Do not let that ASCII tail be
+                # consumed as the binary acknowledgement to VERSION_GET.
+                time.sleep(HANDSHAKE_DRAIN_S)
+                self.ser.reset_input_buffer()
                 return bytes(buf)
 
             if b"TurMass." in buf:
@@ -698,7 +704,7 @@ def run_local(args: argparse.Namespace, kind: str) -> int:
         dev.disconnect()
         log("Done.")
         return 0
-    except (TimeoutError, OSError) as exc:
+    except (TimeoutError, OSError, RuntimeError) as exc:
         log(f"Burn failed: {exc}")
         log(f"Rerun burn.cmd and press the {label} module reset key when prompted.")
         return 3
@@ -786,7 +792,7 @@ def run_rx_stash(args: argparse.Namespace) -> int:
         dev.disconnect()
         log("Done.")
         return 0
-    except TimeoutError as exc:
+    except (TimeoutError, OSError, RuntimeError) as exc:
         log(f"Burn failed: {exc}")
         log("Rerun burn.cmd and press the TX module reset key when prompted.")
         return 3

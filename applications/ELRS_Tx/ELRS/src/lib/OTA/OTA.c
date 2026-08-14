@@ -13,9 +13,13 @@
 #include "logging.h"
 #include "crsf_protocol.h"
 #include "helpers.h"
+#include "unified_config.h"
+#include <string.h>
 
-// static_assert(sizeof(OTA_Packet4_s) == OTA4_PACKET_SIZE, "OTA4 packet stuct is invalid!");
-// static_assert(sizeof(OTA_Packet8_s) == OTA8_PACKET_SIZE, "OTA8 packet stuct is invalid!");
+_Static_assert(sizeof(OTA_Packet4_s) == OTA4_PACKET_SIZE, "OTA4 packet struct is invalid");
+_Static_assert(sizeof(OTA_Packet8_s) == OTA8_PACKET_SIZE, "OTA8 packet struct is invalid");
+_Static_assert(ELRS8_TELEMETRY_BYTES_PER_CALL == AIRPORT_OTA_MAX_PAYLOAD,
+               "AirPort OTA payload size changed");
 
 bool OtaIsFullRes;
 volatile uint8_t OtaNonce;
@@ -31,6 +35,11 @@ void OtaUpdateCrcInitFromUid()
 {
     OtaCrcInitializer = (UID[4] << 8) | UID[5];
     OtaCrcInitializer ^= OTA_VERSION_ID;
+#if ELRS_HAS_AIRPORT
+    if (UnifiedConfig_IsAirport()) {
+        OtaCrcInitializer ^= AIRPORT_CRC_DOMAIN;
+    }
+#endif
 }
 
 static inline uint8_t HybridWideNonceToSwitchIndex(uint8_t const nonce)
@@ -339,38 +348,26 @@ void OtaUpdateSerializers(OtaSwitchMode_e const switchMode, uint8_t packetSize)
     OtaSwitchModeCurrent = switchMode;
 }
 
-// void OtaPackAirportData(OTA_Packet_s * const otaPktPtr, FIFO<AP_MAX_BUF_LEN> *inputBuffer)
-// {
-//     otaPktPtr->std.type = PACKET_TYPE_TLM;
+#if ELRS_HAS_AIRPORT
+uint8_t OtaPackAirportData(OTA_Packet_s *otaPktPtr, AirportFifo_t *inputBuffer)
+{
+    uint16_t available = AirportFifo_Size(inputBuffer);
+    uint8_t count = AirportPayloadLengthClamp(available);
 
-//     inputBuffer->lock();
-//     uint8_t count = inputBuffer->size();
-//     if (OtaIsFullRes)
-//     {
-//         count = std::min(count, (uint8_t)ELRS8_TELEMETRY_BYTES_PER_CALL);
-//         otaPktPtr->full.airport.count = count;
-//         inputBuffer->popBytes(otaPktPtr->full.airport.payload, count);
-//     }
-//     else
-//     {
-//         count = std::min(count, (uint8_t)ELRS4_TELEMETRY_BYTES_PER_CALL);
-//         otaPktPtr->std.airport.count = count;
-//         inputBuffer->popBytes(otaPktPtr->std.airport.payload, count);
-//         otaPktPtr->std.airport.type = ELRS_TELEMETRY_TYPE_DATA;
-//     }
-//     inputBuffer->unlock();
-// }
+    memset(otaPktPtr, 0, sizeof(*otaPktPtr));
+    otaPktPtr->full.airport.packetType = PACKET_TYPE_TLM;
+    otaPktPtr->full.airport.count = count;
+    AirportFifo_PopBytes(inputBuffer, otaPktPtr->full.airport.payload, count);
+    return count;
+}
 
-// void OtaUnpackAirportData(OTA_Packet_s const * const otaPktPtr, FIFO<AP_MAX_BUF_LEN> *outputBuffer)
-// {
-//     if (OtaIsFullRes)
-//     {
-//         uint8_t count = otaPktPtr->full.airport.count;
-//         outputBuffer->atomicPushBytes(otaPktPtr->full.airport.payload, count);
-//     }
-//     else
-//     {
-//         uint8_t count = otaPktPtr->std.airport.count;
-//         outputBuffer->atomicPushBytes(otaPktPtr->std.airport.payload, count);
-//     }
-// }
+bool OtaUnpackAirportData(const OTA_Packet_s *otaPktPtr, AirportFifo_t *outputBuffer)
+{
+    uint8_t count = otaPktPtr->full.airport.count;
+    if (!AirportPayloadLengthIsValid(count)) {
+        return false;
+    }
+
+    return AirportFifo_PushBytes(outputBuffer, otaPktPtr->full.airport.payload, count) == count;
+}
+#endif

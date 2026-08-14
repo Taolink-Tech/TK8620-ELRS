@@ -11,6 +11,7 @@
 #include "config.h"
 #include "lua.h"
 #include "tk86xx_api.h"
+#include "unified_config.h"
 
 #define CRSF_RX_BUF_SIZE (CRSF_MAX_PACKET_LEN * 2)
 CRSFHandset_t CRSFHandset = {
@@ -30,18 +31,26 @@ static uint8_t sRxDataBuf[CRSF_RX_BUF_SIZE];
 static FIFO_t SerialOutFIFO;
 
 #if !defined(USE_SBUS_PROTOCOL) && !defined(USE_INVERTED_SBUS_PROTOCOL)
+static void CrsfBufferByte(uint8_t byte)
+{
+    uint16_t next = (uint16_t)((s_rx_wr + 1) % CRSF_RX_BUF_SIZE);
+    if (next == s_rx_rd) {
+        s_rx_rd = (uint16_t)((s_rx_rd + 1) % CRSF_RX_BUF_SIZE);
+    }
+    sRxDataBuf[s_rx_wr] = byte;
+    s_rx_wr = next;
+}
+
 /* UART RX interrupt callback: buffer incoming bytes only. */
 RAMCODE_SECTION static void Crsf_UartRxCallback(uint8_t *data, uint8_t len)
 {
+#if ELRS_UNIFIED
+    UnifiedConfig_FilterBytes(data, len, CrsfBufferByte);
+#else
     for (uint8_t i = 0; i < len; i++){
-        uint16_t next = (uint16_t)((s_rx_wr + 1) % CRSF_RX_BUF_SIZE);
-        if (next == s_rx_rd){
-            /* Overflow: drop the oldest byte and keep the latest stream moving. */
-            s_rx_rd = (uint16_t)((s_rx_rd + 1) % CRSF_RX_BUF_SIZE);
-        }
-        sRxDataBuf[s_rx_wr] = data[i];
-        s_rx_wr = next;
+        CrsfBufferByte(data[i]);
     }
+#endif
 }
 #endif
 

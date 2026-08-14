@@ -8,6 +8,8 @@ param(
     [int]$Freq = 900320000,
     [string]$TargetId,
     [switch]$KeepUserParams,
+    [Alias("EraseUserParams")]
+    [switch]$Erase,
     [switch]$VerboseLog,
     [switch]$DryRun,
 
@@ -39,9 +41,14 @@ if ($null -ne $ExtraArgs -and $ExtraArgs.Count -gt 0) {
 if ($Mode -eq "help") {
     Write-Host "Available targets:"
     Write-Host "  .\burn.cmd tx"
-    Write-Host "      Flash TX bootloader and build\ELRS_Tx\TK8620_ELRS_TX_P.hex over UART"
+    Write-Host "      Flash unified TX bootloader and build\ELRS_Tx\TK8620_ELRS_TX_P.hex over UART"
+    Write-Host "      Binding and user configuration are preserved by default"
     Write-Host "  .\burn.cmd rx"
-    Write-Host "      Flash RX bootloader and build\ELRS_Rx\TK8620_ELRS_RX_P.hex over UART"
+    Write-Host "      Flash unified RX bootloader and build\ELRS_Rx\TK8620_ELRS_RX_P.hex over UART"
+    Write-Host "      Binding and user configuration are preserved by default"
+    Write-Host "  .\burn.cmd tx -Erase"
+    Write-Host "  .\burn.cmd rx -Erase"
+    Write-Host "      Explicitly erase binding and all user configuration"
     Write-Host "  .\burn.cmd rx-stash"
     Write-Host "      Stage build\ELRS_Rx\TK8620_ELRS_RX_P.hex into TX flash for wireless update"
     Write-Host ""
@@ -145,6 +152,11 @@ $burnToolExe = Join-Path $Root "tools\burn\tk8620_flasher.exe"
 $isLocalBurn = $Mode -eq "tx" -or $Mode -eq "rx"
 $isTxBurn = $Mode -eq "tx"
 $isRxStash = $Mode -eq "rx-stash"
+$flasherMode = if ($isRxStash) { "rx-stash" } elseif ($isTxBurn) { "tx" } else { "rx" }
+
+if ($KeepUserParams -and $Erase) {
+    throw "-KeepUserParams and -Erase cannot be used together."
+}
 
 if (-not (Test-Path -LiteralPath $burnToolExe)) {
     Write-Host "Flasher executable not found." -ForegroundColor Red
@@ -166,8 +178,8 @@ if (-not $isRxStash) {
 }
 
 if ($isRxStash) {
-    if ($PSBoundParameters.ContainsKey("KeepUserParams")) {
-        throw "-KeepUserParams is only valid with tx/rx local burn modes."
+    if ($PSBoundParameters.ContainsKey("KeepUserParams") -or $PSBoundParameters.ContainsKey("Erase")) {
+        throw "-KeepUserParams and -Erase are only valid with tx/rx local burn modes."
     }
 }
 
@@ -178,10 +190,10 @@ if ($isLocalBurn) {
     $bootloaderPath = Resolve-RequiredFile -Path $defaultBootloader -Label "Bootloader" -Hint "Keep firmware\bootloader\TK8620_B_V2.0.2.hex in the repository."
 
     if ($isTxBurn) {
-        $firmwarePath = Resolve-RequiredFile -Path $defaultTxFirmware -Label "TX firmware" -Hint "Run .\build.cmd tx before flashing."
+        $firmwarePath = Resolve-RequiredFile -Path $defaultTxFirmware -Label "Unified TX firmware" -Hint "Run .\build.cmd tx before flashing."
     }
     else {
-        $firmwarePath = Resolve-RequiredFile -Path $defaultRxFirmware -Label "RX firmware" -Hint "Run .\build.cmd rx before flashing."
+        $firmwarePath = Resolve-RequiredFile -Path $defaultRxFirmware -Label "Unified RX firmware" -Hint "Run .\build.cmd rx before flashing."
     }
 }
 else {
@@ -202,7 +214,7 @@ else {
 }
 Write-Host "Port: $targetPort"
 
-$args = @($Mode, "--port", $targetPort, "--baud", "$Baud")
+$args = @($flasherMode, "--port", $targetPort, "--baud", "$Baud")
 
 if ($isLocalBurn) {
     $args += @("--bootloader", $bootloaderPath, "--firmware", $firmwarePath)
@@ -220,7 +232,7 @@ else {
     }
 }
 
-if ($KeepUserParams) {
+if ($isLocalBurn -and -not $Erase) {
     $args += "--keep-user-params"
 }
 if ($VerboseLog) {
