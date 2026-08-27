@@ -10,8 +10,8 @@ compatibility information for that module.
 
 | Module | Description | Files |
 | --- | --- | --- |
-| TK8620 ELRS TX Module | TX transmitter module hardware | [`tk8620-elrs-tx/`](tk8620-elrs-tx/) |
-| TK8620 ELRS RX Module | RX receiver module hardware | [`tk8620-elrs-rx/`](tk8620-elrs-rx/) |
+| TKB-310 TK8620 ELRS TX Module | TX transmitter module hardware | [`tk8620-elrs-tx/`](tk8620-elrs-tx/) |
+| TKM-300 TK8620 ELRS RX Module | RX receiver module hardware | [`tk8620-elrs-rx/`](tk8620-elrs-rx/) |
 
 ## Usage
 

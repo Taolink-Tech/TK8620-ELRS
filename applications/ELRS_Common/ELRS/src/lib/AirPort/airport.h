@@ -13,8 +13,10 @@
 
 #define ELRS_HAS_AIRPORT ((ELRS_AIRPORT) || (ELRS_UNIFIED))
 
+#define AIRPORT_UART_BAUD_DEFAULT 460800U
+
 #ifndef AIRPORT_UART_BAUD
-#define AIRPORT_UART_BAUD 9600U
+#define AIRPORT_UART_BAUD AIRPORT_UART_BAUD_DEFAULT
 #endif
 #ifndef AIRPORT_RF_RATE
 #define AIRPORT_RF_RATE RATE_TMS_250HZ
@@ -23,6 +25,24 @@
 #define AIRPORT_FIFO_CAPACITY 128U
 #define AIRPORT_OTA_MAX_PAYLOAD 10U
 #define AIRPORT_CRC_DOMAIN 0x4150U
+
+static inline bool AirportBaudIsSupported(uint32_t baud)
+{
+    switch (baud) {
+    case 4800U:
+    case 9600U:
+    case 19200U:
+    case 38400U:
+    case 57600U:
+    case 115200U:
+    case 230400U:
+    case 460800U:
+    case 921600U:
+        return true;
+    default:
+        return false;
+    }
+}
 
 typedef struct {
     volatile uint16_t head;

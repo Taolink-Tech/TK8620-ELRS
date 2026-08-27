@@ -21,7 +21,7 @@ Check these items before buying:
 
 | Product | Variants | Status | Purchase link | Hardware files |
 | --- | --- | --- | --- | --- |
-| TK8620 ELRS Module | Select TX or RX on the product page; order both variants for a matched pair | Released | [Taobao product page](https://item.taobao.com/item.htm?ft=t&id=1068476636220&spm=a21dvs.23580594.0.0.4fee2c1bPYE3AY) | [`TX`](boards/tk8620-elrs-tx/) / [`RX`](boards/tk8620-elrs-rx/) |
+| TK8620 ELRS Module | TKB-310 TX and TKM-300 RX; order both for a matched pair | Released | [Taobao product page](https://item.taobao.com/item.htm?ft=t&id=1068476636220&spm=a21dvs.23580594.0.0.4fee2c1bPYE3AY) | [`TX`](boards/tk8620-elrs-tx/) / [`RX`](boards/tk8620-elrs-rx/) |
 
 ## After You Receive A Module
 

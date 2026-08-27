@@ -3,8 +3,8 @@
 ## ExpressLRS
 
 - Project: https://github.com/ExpressLRS/ExpressLRS
-- Baseline version: `3.5.6`
-- Baseline commit: `ee188b4efb9a707f682e8b2d966cd670de92ab50`
+- Baseline version: `3.6.4`
+- Baseline commit: `b61c9e24305b2f80046a5e0b3c4edf56c4f059a3`
 - License: GNU General Public License v3.0
 
 GPL-3.0 text is included in `LICENSE.md`.

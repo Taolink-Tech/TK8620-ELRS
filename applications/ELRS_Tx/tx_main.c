@@ -866,7 +866,7 @@ static void setup(void)
 #if ELRS_HAS_AIRPORT
         if (UnifiedConfig_IsAirport()) {
           Tk86xxSerialConfig serialConfig = {
-            .baudRate = AIRPORT_UART_BAUD,
+            .baudRate = UnifiedConfig_GetAirportBaud(),
             .wordLength = TK86XX_SERIAL_WORD_LENGTH_8B,
             .parity = TK86XX_SERIAL_PARITY_NONE,
             .stopBits = TK86XX_SERIAL_STOP_BITS_1,

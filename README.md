@@ -1,6 +1,6 @@
 # TK8620 ELRS
 
-TK8620 ELRS is an ExpressLRS 3.5.6 firmware port and hardware reference package
+TK8620 ELRS is an ExpressLRS 3.6.4 firmware port and hardware reference package
 for TK8620-based TX and RX modules.
 
 This repository is for people who want to use TK8620 hardware quickly and for
@@ -27,6 +27,9 @@ You can use this repository to:
 | Buy a TK8620 ELRS module | [Taobao product page](https://item.taobao.com/item.htm?id=1068476636220) |
 | Choose a module and review purchase notes | [`hardware/PURCHASE.md`](hardware/PURCHASE.md) |
 | Build TX/RX firmware | [Build](#build) |
+| Interpret the status LED or reset a module | [Status LED and Reset](#status-led-and-reset) |
+| Check CRSF, SBUS, and AirPort interfaces | [Serial Interfaces](#serial-interfaces) |
+| Bind a TX/RX pair | [Binding](#binding) |
 | Switch between RC and AirPort | [RC/AirPort Mode](#rcairport-mode) |
 | Flash a TX module | [Flash TX](#flash-tx) |
 | Flash an RX module over UART | [Flash RX](#flash-rx) |
@@ -38,11 +41,57 @@ You can use this repository to:
 
 | Hardware | Role | Status | Hardware files | Purchase |
 | --- | --- | --- | --- | --- |
-| TK8620 ELRS TX Module | TX | Released | [`hardware/boards/tk8620-elrs-tx/`](hardware/boards/tk8620-elrs-tx/) | [`hardware/PURCHASE.md`](hardware/PURCHASE.md) |
-| TK8620 ELRS RX Module | RX | Released | [`hardware/boards/tk8620-elrs-rx/`](hardware/boards/tk8620-elrs-rx/) | [`hardware/PURCHASE.md`](hardware/PURCHASE.md) |
+| TKB-310 TK8620 ELRS TX Module | TX | Released | [`hardware/boards/tk8620-elrs-tx/`](hardware/boards/tk8620-elrs-tx/) | [`hardware/PURCHASE.md`](hardware/PURCHASE.md) |
+| TKM-300 TK8620 ELRS RX Module | RX | Released | [`hardware/boards/tk8620-elrs-rx/`](hardware/boards/tk8620-elrs-rx/) | [`hardware/PURCHASE.md`](hardware/PURCHASE.md) |
 
 Use files from the matching module directory. Do not mix TX and RX schematics,
 PCB files, BOMs, placement files, or manufacturing outputs.
+
+## Status LED and Reset
+
+### Status LED
+
+| Module | LED pattern | Meaning |
+| --- | --- | --- |
+| TX | Steady on | Powered and operating normally. This does not by itself confirm that the RX link is connected. |
+| TX | One brief flicker | The short binding transmission window is active. This does not confirm that binding succeeded. |
+| RX | Steady on | Connected to the TX module. |
+| RX | 500 ms on, 500 ms off | Disconnected and waiting for the TX link. |
+| RX | Two short flashes, then a pause | Binding mode. |
+
+The RX patterns apply in both RC and AirPort modes. LED color may vary with the
+module hardware revision; use the blink pattern rather than color to identify
+the state.
+
+### Reset
+
+`configure.cmd` and `burn.cmd` reset the TX module automatically. When either
+tool prompts for an RX manual reset, keep the UART grounds connected, briefly
+touch the USB-UART adapter's 3.3 V output to the bottom-side `TP5` reset test
+point, and release it immediately. See the module-specific reset notes for the
+[`TX`](hardware/boards/tk8620-elrs-tx/README.md#reset) and
+[`RX`](hardware/boards/tk8620-elrs-rx/README.md#reset) hardware.
+
+## Serial Interfaces
+
+| Mode and module | Interface | Direction | Serial settings |
+| --- | --- | --- | --- |
+| RC - TKB-310 TX | CRSF handset | Radio to TX, with telemetry return | Half duplex, 8N1; `400000` default, `420000`, or `921600` baud |
+| RC - TKM-300 RX | CRSF | Bidirectional RX/flight-controller UART | Full duplex, normal polarity, 8N1, `420000` baud |
+| RC - TKM-300 RX | SBUS | RX to flight controller on the `TX/SBUS` pin | Output only, non-inverted, 8E2, `100000` baud |
+| AirPort - TX and RX | Transparent UART | Bidirectional TX/RX byte stream | Full duplex, normal polarity, 8N1; baud selected with `configure.cmd` |
+
+The standard unified TX firmware uses CRSF handset input; SBUS handset input is
+not enabled. In RC mode, select CRSF or SBUS for the RX from the receiver Lua
+`Serial Protocol` setting. AirPort mode uses the TX and RX UART pins for
+transparent serial data instead of RC serial protocols.
+
+## Binding
+
+Set both modules to RC mode. Open the transmitter ELRS Lua menu and select
+`Bind`. If the RX is not already in binding mode, power it on three times in
+quick succession and leave it powered after the third start. Binding is
+complete when the RX status LED becomes steady.
 
 ## Repository Contents
 
@@ -148,14 +197,25 @@ Run the interactive configuration tool:
 .\configure.cmd
 ```
 
-Select RC, AirPort, or status query, then restart each device when prompted.
-Configure both TX and RX to the same mode. If user parameters were erased during
-flashing, switch to RC and bind the pair again before using AirPort.
+Select RC, AirPort, or status query, then follow the prompts to reset and
+configure each device.
+When selecting AirPort, choose one of the supported baud rates: `4800`, `9600`,
+`19200`, `38400`, `57600`, `115200`, `230400`, `460800`, or `921600`. The
+default is `460800`. Configure both TX and RX to the same mode and baud rate. If
+user parameters were erased during flashing, switch to RC and bind the pair
+again before using AirPort.
 
 In AirPort mode, connect the computer to the TX module's Type-C serial interface
 and connect the external device to the RX module UART TX, RX, and GND pins. Both
-serial ports use `9600 baud, 8 data bits, no parity, 1 stop bit`, normal polarity,
-and full duplex.
+serial ports use the selected baud rate with `8 data bits, no parity, 1 stop
+bit`, normal polarity, and full duplex. Run `configure.cmd` again to change the
+AirPort baud rate on both devices.
+
+The selected UART baud rate controls the local serial ports; it does not change
+the fixed AirPort RF rate or guarantee continuous over-the-air throughput at
+that baud. Higher rates are intended for burst traffic. Applications that send
+continuous data must stay within the available RF throughput and handle
+overflow or loss.
 
 AirPort carries a byte stream, not application packet boundaries. It does not
 acknowledge or retransmit lost RF packets. Applications that require complete
@@ -239,8 +299,9 @@ wireless update from the TX firmware by using one of these methods:
 
 - Open the transmitter Lua menu and start the RX wireless update from the menu.
 
-After the TX module enters wireless update mode, reset or power-cycle the RX
-module. Wait for the wireless update to complete.
+After the TX module enters wireless update mode, reset the RX module using the
+[`TP5` procedure](hardware/boards/tk8620-elrs-rx/README.md#reset). Wait for the
+wireless update to complete.
 
 ## Licenses
 

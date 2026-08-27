@@ -260,8 +260,8 @@ function New-VersionHeader {
         "#define TK8620_ELRS_GIT_COMMIT $(ConvertTo-CStringLiteral $commit)",
         "#define TK8620_ELRS_HAS_GIT_COMMIT $(if ($commit) { '1' } else { '0' })",
         "#define TK8620_ELRS_GIT_DIRTY $(if ($dirty) { '1' } else { '0' })",
-        '#define ELRS_UPSTREAM_VERSION "3.5.6"',
-        '#define ELRS_UPSTREAM_COMMIT "ee188b4efb9a707f682e8b2d966cd670de92ab50"',
+        '#define ELRS_UPSTREAM_VERSION "3.6.4"',
+        '#define ELRS_UPSTREAM_COMMIT "b61c9e24305b2f80046a5e0b3c4edf56c4f059a3"',
         '',
         '#if TK8620_ELRS_GIT_DIRTY',
         '#define TK8620_ELRS_DIRTY_SUFFIX "-dirty"',
@@ -422,7 +422,7 @@ function Build-Project {
             $commonArgs += '-DSENSI_TEST_PROFILE=0'
             $commonArgs += '-DELRS_AIRPORT=0'
             $commonArgs += '-DELRS_UNIFIED=1'
-            $commonArgs += '-DAIRPORT_UART_BAUD=9600'
+            $commonArgs += '-DAIRPORT_UART_BAUD=460800'
             $commonArgs += '-DAIRPORT_RF_RATE=RATE_TMS_250HZ'
         }
         'signal-generator' {
@@ -607,7 +607,7 @@ $commitDisplay = if ($versionInfo.Commit) {
 } else {
     ''
 }
-Write-Step "[VERSION] $($versionInfo.Version)-tk8620 elrs-3.5.6$commitDisplay"
+Write-Step "[VERSION] $($versionInfo.Version)-tk8620 elrs-3.6.4$commitDisplay"
 Write-Step "[PROFILE] $BuildProfile"
 
 if ($Target -in @('all', 'rx')) {

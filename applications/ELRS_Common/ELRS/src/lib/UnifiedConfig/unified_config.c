@@ -34,7 +34,8 @@ typedef struct __attribute__((packed)) {
     uint16_t length;
     uint8_t role;
     uint8_t mode;
-    uint8_t reserved[18];
+    uint8_t reserved[14];
+    uint32_t airportBaud;
     uint32_t crc32;
 } unified_mode_record_t;
 
@@ -50,6 +51,7 @@ typedef enum {
 
 static unified_role_e s_role;
 static unified_mode_e s_mode = UNIFIED_MODE_RC;
+static uint32_t s_airportBaud = AIRPORT_UART_BAUD_DEFAULT;
 static bool s_recordValid;
 static const char *s_version;
 static const char *s_buildId;
@@ -105,7 +107,8 @@ static bool record_is_valid(const unified_mode_record_t *record)
         record->version != UNIFIED_MODE_RECORD_VERSION ||
         record->length != sizeof(*record) ||
         record->role != (uint8_t)s_role ||
-        record->mode > (uint8_t)UNIFIED_MODE_AIRPORT) {
+        record->mode > (uint8_t)UNIFIED_MODE_AIRPORT ||
+        !AirportBaudIsSupported(record->airportBaud)) {
         return false;
     }
 
@@ -119,9 +122,10 @@ static void load_record(void)
     s_recordValid = flash_user_read(UNIFIED_MODE_FLASH_OFFSET, (uint8_t *)&record, sizeof(record)) >= 0 &&
                     record_is_valid(&record);
     s_mode = s_recordValid ? (unified_mode_e)record.mode : UNIFIED_MODE_RC;
+    s_airportBaud = s_recordValid ? record.airportBaud : AIRPORT_UART_BAUD_DEFAULT;
 }
 
-static bool store_mode(unified_mode_e mode)
+static bool store_config(unified_mode_e mode, uint32_t airportBaud)
 {
     unified_mode_record_t record;
     unified_mode_record_t verify;
@@ -132,6 +136,7 @@ static bool store_mode(unified_mode_e mode)
     record.length = sizeof(record);
     record.role = (uint8_t)s_role;
     record.mode = (uint8_t)mode;
+    record.airportBaud = airportBaud;
     record.crc32 = crc32_update(0U, (const uint8_t *)&record, offsetof(unified_mode_record_t, crc32));
 
     if (flash_user_erase(UNIFIED_MODE_FLASH_OFFSET, sizeof(record)) < 0 ||
@@ -141,11 +146,13 @@ static bool store_mode(unified_mode_e mode)
         !record_is_valid(&verify)) {
         s_recordValid = false;
         s_mode = UNIFIED_MODE_RC;
+        s_airportBaud = AIRPORT_UART_BAUD_DEFAULT;
         return false;
     }
 
     s_recordValid = true;
     s_mode = mode;
+    s_airportBaud = airportBaud;
     return true;
 }
 
@@ -320,19 +327,25 @@ static void handle_session_frame(const uint8_t *frame, uint8_t length, uint32_t 
         response[1] = (uint8_t)s_role;
         response[2] = (uint8_t)s_mode;
         response[3] = UNIFIED_MODE_RECORD_VERSION;
-        frame_send(CFG_CMD_GET_CONFIG, sequence, challenge, response, 4U);
+        write_u32_le(&response[4], s_airportBaud);
+        frame_send(CFG_CMD_GET_CONFIG, sequence, challenge, response, 8U);
         break;
     case CFG_CMD_SET_MODE:
-        if (payloadLength != 1U || payload[0] > (uint8_t)UNIFIED_MODE_AIRPORT) {
+        if (payloadLength != 5U || payload[0] > (uint8_t)UNIFIED_MODE_AIRPORT) {
             response[0] = 1U;
-        } else if (s_recordValid && payload[0] == (uint8_t)s_mode) {
+        } else if (!AirportBaudIsSupported(read_u32_le(&payload[1]))) {
+            response[0] = 3U;
+        } else if (s_recordValid && payload[0] == (uint8_t)s_mode &&
+                   read_u32_le(&payload[1]) == s_airportBaud) {
             response[0] = 0U;
         } else {
-            response[0] = store_mode((unified_mode_e)payload[0]) ? 0U : 2U;
+            response[0] = store_config((unified_mode_e)payload[0],
+                                       read_u32_le(&payload[1])) ? 0U : 2U;
         }
         response[1] = (uint8_t)s_mode;
         response[2] = s_recordValid ? 1U : 0U;
-        frame_send(CFG_CMD_SET_MODE, sequence, challenge, response, 3U);
+        write_u32_le(&response[3], s_airportBaud);
+        frame_send(CFG_CMD_SET_MODE, sequence, challenge, response, 7U);
         break;
     case CFG_CMD_REBOOT:
         response[0] = 0U;
@@ -374,6 +387,7 @@ bool UnifiedConfig_IsAirport(void) { return s_mode == UNIFIED_MODE_AIRPORT; }
 bool UnifiedConfig_IsSessionActive(void) { return s_phase != CFG_PHASE_DISCOVERY; }
 bool UnifiedConfig_IsRecordValid(void) { return s_recordValid; }
 unified_mode_e UnifiedConfig_GetStoredMode(void) { return s_mode; }
+uint32_t UnifiedConfig_GetAirportBaud(void) { return s_airportBaud; }
 void UnifiedConfig_SetLoggingEnabled(bool enabled) { s_loggingEnabled = enabled; }
 bool UnifiedConfig_IsLoggingEnabled(void)
 {

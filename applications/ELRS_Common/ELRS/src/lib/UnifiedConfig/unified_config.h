@@ -3,6 +3,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "airport.h"
+
 #ifndef ELRS_UNIFIED
 #define ELRS_UNIFIED 0
 #endif
@@ -37,6 +39,7 @@ bool UnifiedConfig_IsAirport(void);
 bool UnifiedConfig_IsSessionActive(void);
 bool UnifiedConfig_IsRecordValid(void);
 unified_mode_e UnifiedConfig_GetStoredMode(void);
+uint32_t UnifiedConfig_GetAirportBaud(void);
 void UnifiedConfig_SetLoggingEnabled(bool enabled);
 bool UnifiedConfig_IsLoggingEnabled(void);
 void UnifiedConfig_FilterBytes(const uint8_t *data, uint16_t length,
@@ -68,6 +71,7 @@ static inline bool UnifiedConfig_IsAirport(void)
 static inline bool UnifiedConfig_IsSessionActive(void) { return false; }
 static inline bool UnifiedConfig_IsRecordValid(void) { return false; }
 static inline unified_mode_e UnifiedConfig_GetStoredMode(void) { return UNIFIED_MODE_RC; }
+static inline uint32_t UnifiedConfig_GetAirportBaud(void) { return AIRPORT_UART_BAUD; }
 static inline void UnifiedConfig_SetLoggingEnabled(bool enabled) { (void)enabled; }
 static inline bool UnifiedConfig_IsLoggingEnabled(void) { return ELRS_AIRPORT == 0; }
 static inline void UnifiedConfig_Update(uint32_t nowMs) { (void)nowMs; }

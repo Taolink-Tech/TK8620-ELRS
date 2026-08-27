@@ -852,7 +852,7 @@ static void setupSerial()
 #if ELRS_HAS_AIRPORT
     if (UnifiedConfig_IsAirport()) {
       Tk86xxSerialConfig serialConfig = {
-        .baudRate = AIRPORT_UART_BAUD,
+        .baudRate = UnifiedConfig_GetAirportBaud(),
         .wordLength = TK86XX_SERIAL_WORD_LENGTH_8B,
         .parity = TK86XX_SERIAL_PARITY_NONE,
         .stopBits = TK86XX_SERIAL_STOP_BITS_1,
@@ -982,7 +982,7 @@ static void setup(void)
         // default to CRSF protocol and the compiled baud rate
         // serialBaud = firmwareOptions.uart_baud;
         Tk86xxSerialConfig serialConfig = {
-            .baudRate = UnifiedConfig_IsAirport() ? AIRPORT_UART_BAUD : 420000U,
+            .baudRate = UnifiedConfig_IsAirport() ? UnifiedConfig_GetAirportBaud() : 420000U,
             .wordLength = TK86XX_SERIAL_WORD_LENGTH_8B,
             .parity = TK86XX_SERIAL_PARITY_NONE,
             .stopBits = TK86XX_SERIAL_STOP_BITS_1,
