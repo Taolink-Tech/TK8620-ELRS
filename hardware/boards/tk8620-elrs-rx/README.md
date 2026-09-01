@@ -36,6 +36,7 @@ the RX receiver module.
 
 - [`eda/`](eda/): editable Altium Designer source project and EDA notes.
 - [`fabrication/`](fabrication/): manufacturing outputs.
+- [`images/`](images/): board photos used by this guide.
 
 ## Firmware Use
 
@@ -66,9 +67,12 @@ the module `RX` pin is not used in SBUS mode.
 The RX reset point is `TP5` on the bottom side of the module. It is marked
 `TP5` on the bottom silkscreen.
 
+![RX module bottom side with the TP5 reset pad marked](images/rx-bottom-reset-tp5.jpg)
+
 When `configure.cmd` or `burn.cmd` displays the manual-reset prompt, briefly
-touch the USB-UART adapter's 3.3 V output to `TP5` and release it immediately.
-Keep the existing UART ground connection in place.
+touch the USB-UART adapter's 3.3 V output to `TP5`, then remove it immediately.
+Keep the USB-UART adapter and RX module grounds connected during this step. Do
+not leave `TP5` connected to 3.3 V.
 
 ## Custom Hardware Notes
 
