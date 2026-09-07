@@ -217,7 +217,6 @@ static char luaBadGoodString[10];
 static int event();
 
 extern TxConfig_t txConfig;
-extern void SetSyncSpam();
 extern void StartRxOtaModeSafely(void) __attribute__((weak));
 extern bool BackpackTelemReadyToSend;
 #if defined(PLATFORM_ESP32) || defined(PLATFORM_ESP8266)
@@ -750,17 +749,17 @@ static void luaparamSetModelMatch(luaPropertiesCommon_t *item, uint8_t arg)
     txConfig.SetModelMatch(newModelMatch);
     setLuaTextSelectionValue(&luaModelMatch, newModelMatch ? 1U : 0U);
 
-    if (connectionState == connected)
-    {
-        const uint8_t rxModelId = newModelMatch ? luadevGetModelID() : 0xff;
-        mspPacket_t msp;
-        MSP_packet_reset(&msp);
-        MSP_packet_makeCommand(&msp);
-        msp.function = MSP_SET_RX_CONFIG;
-        MSP_packet_addByte(&msp, MSP_ELRS_MODEL_ID);
-        MSP_packet_addByte(&msp, rxModelId);
-        CRSF_AddMspMessage_packet(&msp, CRSF_ADDRESS_CRSF_RECEIVER);
-    }
+    // Queue the receiver update even while the link state is disconnected.
+    // A model mismatch deliberately suppresses RC and can transiently mark the
+    // TX disconnected, but OTA MSP remains available specifically to clear it.
+    const uint8_t rxModelId = newModelMatch ? luadevGetModelID() : 0xff;
+    mspPacket_t msp;
+    MSP_packet_reset(&msp);
+    MSP_packet_makeCommand(&msp);
+    msp.function = MSP_SET_RX_CONFIG;
+    MSP_packet_addByte(&msp, MSP_ELRS_MODEL_ID);
+    MSP_packet_addByte(&msp, rxModelId);
+    CRSF_AddMspMessage_packet(&msp, CRSF_ADDRESS_CRSF_RECEIVER);
 
     luadevUpdateModelID();
 }
@@ -971,10 +970,6 @@ static int timeout()
     rx_version_refresh_pending = false;
     luaParamUpdateReq(CRSF_FRAMETYPE_PARAMETER_READ, luaRxELRSversion.common.id, 0);
     handledParameter = luaHandleUpdateParameter();
-  }
-  if (handledParameter)
-  {
-    SetSyncSpam();
   }
   return DURATION_IMMEDIATELY;
 }

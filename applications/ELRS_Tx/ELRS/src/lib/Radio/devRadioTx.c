@@ -29,10 +29,8 @@ static void (*txDoneCb)(void) = NULL;
 static void (*txAbortCb)(void) = NULL;
 static void (*tlmWindowDoneCb)(void) = NULL;
 
-static volatile bool     s_pendingAirRateChange = false;
-static uint8_t           s_pendingAirRateIndex = 0;
-static uint32_t          s_pendingAirRateRestartAtMs = 0;
-static bool              s_pendingResetMspSender = false;
+static volatile bool s_pendingAirRateChange = false;
+static uint32_t      s_pendingAirRateRestartAtMs = 0;
 
 #if SENSI_TEST
 static void queueSensiTestPacket(void)
@@ -54,21 +52,6 @@ static void queueSensiTestPacket(void)
     Tk86xxSendData(payload, len);
 }
 #endif
-
-static const char *airRateIndexToStr(uint8_t idx)
-{
-    switch (idx) {
-    case 0: return "5Hz";
-    case 1: return "10Hz";
-    case 2: return "16.6Hz";
-    case 3: return "25Hz";
-    case 4: return "50Hz";
-    case 5: return "100Hz";
-    case 6: return "200Hz";
-    case 7: return "250Hz";
-    default: return "unknown";
-    }
-}
 
 static int getRssiCompensationDb(void)
 {
@@ -125,39 +108,6 @@ void DevRadioTx_RegisterTlmWindowDoneCb(void (*cb)(void))
     tlmWindowDoneCb = cb;
 }
 
-void DevRadioTx_RequestAirRateChange(uint8_t newRateIndex)
-{
-    if (newRateIndex >= RATE_MAX) {
-        newRateIndex = (RATE_MAX > 0) ? (RATE_MAX - 1) : 0;
-    }
-
-    expresslrs_mod_settings_t *const mod = get_elrs_airRateConfig(newRateIndex);
-    if (mod) {
-        DBGLN("[AIRRATE][TX] request idx=%u(%s) interval_us=%u payload=%u", (unsigned)newRateIndex, airRateIndexToStr(newRateIndex),
-              (unsigned)mod->interval, (unsigned)mod->PayloadLength);
-    } else {
-        DBGLN("[AIRRATE][TX] request idx=%u(%s) mod=NULL", (unsigned)newRateIndex, airRateIndexToStr(newRateIndex));
-    }
-
-    // Send an ELRS-specific MSP opcode to RX to request it to switch air rate.
-    // Payload format: [MSP_ELRS_RF_MODE, rateIndex]
-    uint8_t msg[2] = {MSP_ELRS_RF_MODE, newRateIndex};
-    if (MspSender.ResetState && MspSender.SetDataToTransmit) {
-        MspSender.ResetState();
-        MspSender.SetDataToTransmit(msg, (uint8_t)sizeof(msg));
-    }
-
-    // Delay local restart so RX has time to receive the request and re-init first.
-    const uint32_t curIntervalUs = (ExpressLRS_currAirRate_Modparams ? ExpressLRS_currAirRate_Modparams->interval : 4000u);
-    const uint32_t slotPeriodMs = (curIntervalUs + 999u) / 1000u;
-    const uint32_t delayMs = MAX(200u, slotPeriodMs * (uint32_t)(ExpressLRS_currTlmDenom + 1u));
-
-    s_pendingAirRateIndex = newRateIndex;
-    s_pendingAirRateRestartAtMs = millis() + delayMs;
-    s_pendingResetMspSender = true;
-    s_pendingAirRateChange = true;
-}
-
 void DevRadioTx_Stop(void)
 {
     Tk86xxCloseRadio();
@@ -170,10 +120,7 @@ void DevRadioTx_RequestTlmRatioChange(uint8_t previousTlmDenom)
     const uint32_t slotPeriodMs = (intervalUs + 999u) / 1000u;
     const uint32_t delayMs = MAX(200u, slotPeriodMs * (uint32_t)(previousTlmDenom + 1u));
 
-    s_pendingAirRateIndex = ExpressLRS_currAirRate_Modparams ?
-        ExpressLRS_currAirRate_Modparams->index : 0u;
     s_pendingAirRateRestartAtMs = millis() + delayMs;
-    s_pendingResetMspSender = false;
     s_pendingAirRateChange = true;
     DBGLN("[TLMRATIO][TX] delayed slot restart old_denom=%u delay_ms=%u",
           (unsigned)previousTlmDenom, (unsigned)delayMs);
@@ -182,6 +129,10 @@ void DevRadioTx_RequestTlmRatioChange(uint8_t previousTlmDenom)
 static void initialize()
 {
     APIRet ret = API_FAILED;
+
+    // Any full initialization applies the current telemetry slot layout, so a
+    // delayed ratio-only restart is redundant.
+    s_pendingAirRateChange = false;
 
     InitCfg initCfg = {0};
 
@@ -195,7 +146,9 @@ static void initialize()
         #endif
     }
     initCfg.rf_pwr = (TxPower)POWERMGNT_getPowerIndBm();
-    Tk86xxCloseRadio();
+    // Tk86xxInit() already stops an active PHY before reinitializing it. Avoid
+    // a full RF power cycle during rate changes, which can occasionally leave
+    // the transmitter silent until another reinitialization.
     if (txAbortCb) txAbortCb();
 
     if ((ret = Tk86xxInit(&initCfg)) == API_SUCCESS) {
@@ -280,13 +233,7 @@ static int timeout()
     SignalQuality_t signalQuality = {0};
 
     if (s_pendingAirRateChange && (int32_t)(millis() - s_pendingAirRateRestartAtMs) >= 0) {
-        if (s_pendingResetMspSender && MspSender.ResetState) {
-            MspSender.ResetState();
-        }
-        ExpressLRS_currAirRate_Modparams = get_elrs_airRateConfig(s_pendingAirRateIndex);
-        DBGLN("[AIRRATE][TX] restart for idx=%u(%s)", (unsigned)s_pendingAirRateIndex, airRateIndexToStr(s_pendingAirRateIndex));
         txLostSignal = true;
-        s_pendingResetMspSender = false;
         s_pendingAirRateChange = false;
         devicesTriggerEvent();
     }
@@ -335,22 +282,28 @@ static int event()
         initialize();
         start();
         doingBinding = true;
+        txPowerChanged = false;
+        tlmChanged = false;
+        txLostSignal = false;
     } else if (doingBinding) {
         doingBinding = false;
+        initialize();
+        start();
+        txPowerChanged = false;
+        tlmChanged = false;
+        txLostSignal = false;
+    } else if (tlmChanged || txLostSignal) {
+        // A full reinitialization applies the current power too. Consume all
+        // restart-related flags together so event coalescing cannot strand a
+        // rate change behind a simultaneous dynamic-power update.
+        txPowerChanged = false;
+        tlmChanged = false;
+        txLostSignal = false;
         initialize();
         start();
     } else if (txPowerChanged) {
         txPowerChanged = false;
         Tk86xxTxGainSet(POWERMGNT_getPowerIndBm());
-    } else if (tlmChanged) {
-        tlmChanged = false;
-        initialize();
-        start();
-    } else if (txLostSignal) {
-        // DBGLN("txLostSignal, restart Radio");
-        txLostSignal = false;
-        initialize();
-        start();
     }
 
     return DURATION_IMMEDIATELY;

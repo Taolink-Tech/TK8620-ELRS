@@ -12,6 +12,7 @@
 #define OTA4_PACKET_SIZE     8U
 #define OTA4_CRC_CALC_LEN    offsetof(OTA_Packet4_s, crcLow)
 #define OTA8_PACKET_SIZE     13U
+#include "rate_switch.h"
 #define OTA8_CRC_CALC_LEN    offsetof(OTA_Packet8_s, crc)
 
 // Packet header types (ota.std.type)
@@ -125,7 +126,9 @@ typedef struct {
         struct {
             uint8_t packetType; // only low 2 bits
             OTA_Sync_s sync;
-            uint8_t free[4];
+            uint8_t rateSwitchPhase;
+            uint8_t rateSwitchDelay;
+            uint8_t free[2];
         } PACKED sync;
         /** PACKET_TYPE_TLM **/
         struct {
@@ -195,4 +198,3 @@ typedef bool (*UnpackChannelData_t)(OTA_Packet_s const * const otaPktPtr, uint32
 uint8_t OtaPackAirportData(OTA_Packet_s *otaPktPtr, AirportFifo_t *inputBuffer);
 bool OtaUnpackAirportData(const OTA_Packet_s *otaPktPtr, AirportFifo_t *outputBuffer);
 #endif
-

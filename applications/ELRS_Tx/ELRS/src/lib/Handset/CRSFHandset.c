@@ -523,12 +523,21 @@ static bool CRSFHandset_handleInput(void)
 
     // Add new data, and then discard bytes until we start with header byte
     volatile uint8_t toRead = CRSF_MAX_PACKET_LEN - CRSFHandset.SerialInPacketPtr;
-    CRSFHandset.SerialInPacketPtr += (uint8_t)CRSFHandsetReadBytes(&SerialInBuffer[CRSFHandset.SerialInPacketPtr], toRead);
+    const uint16_t bytesRead =
+        CRSFHandsetReadBytes(&SerialInBuffer[CRSFHandset.SerialInPacketPtr], toRead);
+    CRSFHandset.SerialInPacketPtr += (uint8_t)bytesRead;
     CRSFHandsetAlignBufferToSync(0);
 
     // Make sure we have at least a packet header and a length byte
-    if (CRSFHandset.SerialInPacketPtr < 3) 
+    if (CRSFHandset.SerialInPacketPtr < 3)
+    {
+        // A response can exceed one half-duplex transmit budget and leave a
+        // tail in handleOutput(). Drain it once the input side is truly idle;
+        // do not transmit while a fragmented input frame is still arriving.
+        if (CRSFHandset.SerialInPacketPtr == 0 && bytesRead == 0)
+            handleOutput(0);
         return false;
+    }
 
     // Sanity check: A total packet must be at least [sync][len][type][crc] (if no payload) and at most CRSF_MAX_PACKET_LEN
     const uint32_t totalLen = SerialInBuffer[1] + 2;

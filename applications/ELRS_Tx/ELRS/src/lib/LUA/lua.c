@@ -6,6 +6,10 @@
 #include "telemetry.h"
 #include "CRSFHandset.h"
 #include "helpers.h"
+#include "config.h"
+#include <string.h>
+
+extern void SetSyncSpam(void);
 
 void EnterRxBindingModeSafely(void) __attribute__((weak));
 extern Telemetry_t telemetry __attribute__((weak));
@@ -380,16 +384,23 @@ bool luaHandleUpdateParameter(void)
       } else {
         uint8_t id = parameterIndex;
         uint8_t arg = parameterArg;
-        luaPropertiesCommon_t *p = paramDefinitions[id];
         // DBGLN("Set Lua [%s]=%u", p->name, arg);
-        if (id < LUA_MAX_PARAMS && paramCallbacks[id]) {
+        if (id < LUA_MAX_PARAMS && paramDefinitions[id] && paramCallbacks[id]) {
+          luaPropertiesCommon_t *p = paramDefinitions[id];
           // While the command is executing, the handset will send `WRITE state=lcsQuery`.
           // paramCallbacks will set the value when nextStatusChunk == 0, or send any
           // remaining chunks when nextStatusChunk != 0
           if (arg == lcsQuery && nextStatusChunk != 0) {
             pushResponseChunk((struct luaItem_command *)p);
           } else {
+            const tx_config_t configBefore = txConfig.m_config;
             paramCallbacks[id](p, arg);
+            // Only a new configuration value restarts the SYNC announcement.
+            // Lua status/read requests and repeated writes must allow a pending
+            // low-rate announcement to finish and the configuration to commit.
+            if (memcmp(&configBefore, &txConfig.m_config, sizeof(configBefore)) != 0) {
+              SetSyncSpam();
+            }
           }
         }
       }

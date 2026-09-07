@@ -97,6 +97,13 @@ static void StubbornReceiver_ReceiveData(uint8_t const packageIndex, uint8_t con
     // skip the resync process entirely and just pretend this is a fresh boot too
     else if (packageIndex == 1 && pReceiver->currentPackage > 1)
     {
+        // An identical first chunk is an ACK-loss retransmission, not a new
+        // message. Different content still permits a freshly booted sender
+        // to start over without a preceding resync packet.
+        if (pReceiver->currentPackage == 2 && pReceiver->currentOffset == dataLen &&
+            (dataLen == 0 || memcmp(pReceiver->data, receiveData, dataLen) == 0)) {
+            return;
+        }
         pReceiver->currentPackage = 1;
         pReceiver->currentOffset = 0;
         acceptData = true;

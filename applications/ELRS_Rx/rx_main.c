@@ -80,6 +80,15 @@ static bool telemBurstValid;
 static uint8_t ExpressLRS_nextAirRateIndex;
 static int8_t SwitchModePending = 0;
 static bool rxRebootRequested;
+static bool rateCommitPending;
+static uint32_t rateCommitAtMs;
+static uint8_t rateCommitTarget;
+static uint8_t rateCommitRatio;
+static uint8_t rateCommitSwitchMode;
+static OTA_Packet_s queuedTelemetryPacket;
+static bool queuedTelemetryValid;
+static bool telemetryAckArmed;
+static bool HandleSendTelemetryResponse(void);
 #if ELRS_HAS_AIRPORT
 static AirportFifo_t AirportUartToRf;
 static AirportFifo_t AirportRfToUart;
@@ -271,7 +280,16 @@ static void ProcessRfPacket_RC(OTA_Packet_s const * const otaPktPtr)
         return;
 
     bool telemetryConfirmValue = OtaUnpackChannelData(otaPktPtr, ChannelData, ExpressLRS_currTlmDenom);
-    TelemetrySender.ConfirmCurrentPayload(telemetryConfirmValue);
+    if (telemetryAckArmed) {
+        uint8_t offset = TelemetrySender.currentOffset;
+        uint8_t state = TelemetrySender.senderState;
+        bool expected = TelemetrySender.telemetryConfirmExpectedValue;
+        TelemetrySender.ConfirmCurrentPayload(telemetryConfirmValue);
+        if (offset != TelemetrySender.currentOffset || state != TelemetrySender.senderState ||
+            expected != TelemetrySender.telemetryConfirmExpectedValue) {
+            HandleSendTelemetryResponse();
+        }
+    }
 
     // No channels packets to the FC or PWM pins if no model match
     if (connectionHasModelMatch)
@@ -401,7 +419,10 @@ static void TentativeConnection(unsigned long now)
 
     // Use this rate as the initial rate next time if we connected on it
 #if !ELRS_AIRPORT
-    rxConfig.SetRateInitialIdx(ExpressLRS_nextAirRateIndex);
+    if (!InBindingMode)
+    {
+        rxConfig.SetRateInitialIdx(ExpressLRS_nextAirRateIndex);
+    }
 #endif
     // And stop counting toward binding mode
     // if (config.GetPowerOnCounter() != 0)
@@ -448,7 +469,8 @@ static void updateSwitchModePendingFromOta(uint8_t newSwitchMode)
     DBGLN("SwitchModePending = %d", SwitchModePending);
 }
 
-static bool ProcessRfPacket_SYNC(uint32_t const now, OTA_Sync_s const * const otaSync)
+static bool ProcessRfPacket_SYNC(uint32_t const now, OTA_Sync_s const * const otaSync,
+                                uint8_t ratePhase, uint8_t rateDelay)
 {
     // Verify the first two of three bytes of the binding ID, which should always match
     if (otaSync->UID3 != UID[3] || otaSync->UID4 != UID[4])
@@ -468,21 +490,32 @@ static bool ProcessRfPacket_SYNC(uint32_t const now, OTA_Sync_s const * const ot
 
     // LastSyncPacket = now;
 
-    // DBGLN("SYNC rateIndex: %d", otaSync->rateIndex);
-    // Will change the packet air rate in loop() if this changes
-    ExpressLRS_nextAirRateIndex = otaSync->rateIndex;
-    updateSwitchModePendingFromOta(otaSync->switchEncMode);
+    const bool deferredRate = !InBindingMode && !UnifiedConfig_IsAirport() &&
+        otaSync->rateIndex != ExpressLRS_currAirRate_Modparams->index &&
+        (ratePhase == OTA_RATE_PREPARE || ratePhase == OTA_RATE_COMMIT);
+    if (deferredRate) {
+        rateCommitPending = ratePhase == OTA_RATE_COMMIT;
+        if (rateCommitPending) {
+            rateCommitTarget = otaSync->rateIndex;
+            rateCommitRatio = otaSync->newTlmRatio;
+            rateCommitSwitchMode = otaSync->switchEncMode;
+            rateCommitAtMs = now + (uint32_t)rateDelay * OTA_RATE_COMMIT_TICK_MS;
+        }
+    } else {
+        rateCommitPending = false;
+        // Unextended peers retain the original immediate-switch behavior.
+        ExpressLRS_nextAirRateIndex = otaSync->rateIndex;
+        updateSwitchModePendingFromOta(otaSync->switchEncMode);
 
-    // Update TLM ratio, should never be TLM_RATIO_STD/DISARMED, the TX calculates the correct value for the RX
-    expresslrs_tlm_ratio_e TLMrateIn = (expresslrs_tlm_ratio_e)(otaSync->newTlmRatio + (uint8_t)TLM_RATIO_NO_TLM);
-    uint8_t TlmDenom = TLMratioEnumToValue(TLMrateIn);
-    if (ExpressLRS_currTlmDenom != TlmDenom)
-    {
-        // DBGLN("New TLMrate 1:%u", TlmDenom);
-        ExpressLRS_currTlmDenom = TlmDenom;
-        telemBurstValid = false;
-        tlmChanged = true;
-        devicesTriggerEvent();
+        // The TX sends an effective ratio, never STD/DISARMED.
+        expresslrs_tlm_ratio_e TLMrateIn = (expresslrs_tlm_ratio_e)(otaSync->newTlmRatio + (uint8_t)TLM_RATIO_NO_TLM);
+        uint8_t TlmDenom = TLMratioEnumToValue(TLMrateIn);
+        if (ExpressLRS_currTlmDenom != TlmDenom) {
+            ExpressLRS_currTlmDenom = TlmDenom;
+            telemBurstValid = false;
+            tlmChanged = true;
+            devicesTriggerEvent();
+        }
     }
 
     // modelId = 0xff indicates modelMatch is disabled, the XOR does nothing in that case
@@ -556,6 +589,7 @@ static bool ProcessRFPacket(SignalQuality_t *signalQuality)
     case PACKET_TYPE_RCDATA: //Standard RC Data Packet
         ProcessRfPacket_RC(otaPktPtr);
         if (connectionState != connected) {
+            TentativeConnection(now);
             connectionState = connected;
             devicesTriggerEvent();
         }
@@ -566,7 +600,9 @@ static bool ProcessRFPacket(SignalQuality_t *signalQuality)
     case PACKET_TYPE_SYNC: //sync packet from master
         // DBGLN("rcvd sync packet");
         // doStartTimer = 
-        ProcessRfPacket_SYNC(now, OtaIsFullRes ? &otaPktPtr->full.sync.sync : &otaPktPtr->std.sync);
+        ProcessRfPacket_SYNC(now, OtaIsFullRes ? &otaPktPtr->full.sync.sync : &otaPktPtr->std.sync,
+            OtaIsFullRes ? otaPktPtr->full.sync.rateSwitchPhase : 0U,
+            OtaIsFullRes ? otaPktPtr->full.sync.rateSwitchDelay : 0U);
             // && !InBindingMode;
         break;
 #if ELRS_HAS_AIRPORT
@@ -735,6 +771,9 @@ static bool HandleSendTelemetryResponse(void)
 
     OtaGeneratePacketCrc(&otaPkt);
 
+    queuedTelemetryPacket = otaPkt;
+    queuedTelemetryValid = true;
+    telemetryAckArmed = false;
     Tk86xxSendData((uint8_t *)&otaPkt, ExpressLRS_currAirRate_Modparams->PayloadLength);
 
     return true;
@@ -742,7 +781,22 @@ static bool HandleSendTelemetryResponse(void)
 
 static void TXdoneISR(void)
 {
-    HandleSendTelemetryResponse();
+    if (UnifiedConfig_IsAirport() || !TelemetrySender.IsActive() || !queuedTelemetryValid) {
+        HandleSendTelemetryResponse();
+        return;
+    }
+
+    // Keep the same chunk (including its length) until it is acknowledged.
+    // Preparing a different LINK/DATA chunk here would overwrite the sender's
+    // bytesLastPayload before the ACK for the just-transmitted packet arrives.
+    telemetryAckArmed = true;
+    if (connectionState != disconnected && ExpressLRS_currTlmDenom != 1U && teamraceHasModelMatch) {
+        if (OtaIsFullRes && queuedTelemetryPacket.full.tlm_dl.containsLinkStats) {
+            LinkStatsToOta(&queuedTelemetryPacket.full.tlm_dl.ul_link_stats.stats);
+        }
+        OtaGeneratePacketCrc(&queuedTelemetryPacket);
+        Tk86xxSendData((uint8_t *)&queuedTelemetryPacket, ExpressLRS_currAirRate_Modparams->PayloadLength);
+    }
 }
 
 #if !ELRS_AIRPORT
@@ -920,7 +974,10 @@ void ApplyRxSerialProtocol(eSerialProtocol_e protocol)
 
 static void SetRFLinkRate(uint8_t index, bool bindMode) // Set speed of RF link
 {
+    rateCommitPending = false;
     DBGLN("SetRFLinkRate: index = %u", index);
+    queuedTelemetryValid = false;
+    telemetryAckArmed = false;
     expresslrs_mod_settings_t *const ModParams = get_elrs_airRateConfig(index);
     expresslrs_rf_pref_params_s *const RFperf = get_elrs_RFperfParams(index);
 
@@ -1343,7 +1400,6 @@ static void CheckConfigChangePending()
         DBGLN("Config changed, commit");
         // LostConnection(false);
         rxConfig.Commit();
-        DevRadioRx_RequestAirRateChange(ExpressLRS_nextAirRateIndex);
         devicesTriggerEvent();
     }
 }
@@ -1434,6 +1490,18 @@ static void loop(void)
     }
 #endif
 
+    if (rateCommitPending && (int32_t)(now - rateCommitAtMs) >= 0) {
+        rateCommitPending = false;
+        if (!InBindingMode && !UnifiedConfig_IsAirport()) {
+            ExpressLRS_nextAirRateIndex = rateCommitTarget;
+            updateSwitchModePendingFromOta(rateCommitSwitchMode);
+            ExpressLRS_currTlmDenom = TLMratioEnumToValue(
+                (expresslrs_tlm_ratio_e)(rateCommitRatio + TLM_RATIO_NO_TLM));
+            telemBurstValid = false;
+            LostConnection(true);
+        }
+    }
+
     if ((connectionState != disconnected) && (ExpressLRS_currAirRate_Modparams->index != ExpressLRS_nextAirRateIndex))
     {
         DBGLN("Req air rate change %u->%u", ExpressLRS_currAirRate_Modparams->index, ExpressLRS_nextAirRateIndex);
@@ -1445,6 +1513,7 @@ static void loop(void)
         uint8_t nextPlayloadSize = 0;
         if (!TelemetrySender.IsActive() && telemetry.GetNextPayload(&nextPlayloadSize, currentTelemetryPayload)) {
             TelemetrySender.SetDataToTransmit(currentTelemetryPayload, nextPlayloadSize);
+            HandleSendTelemetryResponse();
         }
     }
 #endif

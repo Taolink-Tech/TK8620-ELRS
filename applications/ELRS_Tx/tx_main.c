@@ -71,6 +71,8 @@ static uint32_t TLMpacketReported = 0;
 static volatile uint32_t syncSpamCounter = 0;
 static volatile uint8_t syncSpamCounterAfterRateChange = 0;
 static volatile bool ModelUpdatePending = false;
+static bool rateCommitActive;
+static uint32_t rateCommitAtMs;
 static bool commitInProgress = false;
 static uint32_t SyncPacketLastSent = 0;
 uint32_t rfModeLastChangedMS = 0;
@@ -80,6 +82,8 @@ static enum { stbIdle, stbRequested, stbBoosting } syncTelemBoostState = stbIdle
 #endif
 static bool DownlinkTlmReceivedThisWindow = false;
 static bool TxPayloadPending = false;
+static uint32_t TxPayloadQueuedAtMs = 0;
+#define TX_PAYLOAD_PENDING_RECOVERY_MS 500U
 static bool NextPacketIsMspData = false;
 static bool RxOtaModeRequested = false;
 static bool RxOtaModeWasActive = false;
@@ -291,6 +295,12 @@ static void EnterBindingMode()
 
     // Queue up sending the Master UID as MSP packets
     SendUIDOverMSP();
+    // Binding owns the transmit stream. A preceding configuration/model change
+    // may still have SYNC announcements outstanding; none may consume the
+    // limited binding packet budget instead of carrying the UID.
+    syncSpamCounter = 0;
+    syncSpamCounterAfterRateChange = 0;
+    rateCommitActive = false;
 
   // Binding uses a CRCInit=0, 50Hz, and InvertIQ
   OtaCrcInitializer = 0;
@@ -326,6 +336,7 @@ void SetSyncSpam()
   // Send sync spam if a UI device has requested to and the config has changed
   if (txConfig.IsModified())
   {
+    rateCommitActive = false;
     syncSpamCounter = syncSpamAmount;
     syncSpamCounterAfterRateChange = syncSpamAmountAfterRateChange;
   }
@@ -333,6 +344,7 @@ void SetSyncSpam()
 
 static void SetRFLinkRate(uint8_t index) // Set speed of RF link
 {
+  rateCommitActive = false;
     expresslrs_mod_settings_t *const ModParams = get_elrs_airRateConfig(index);
       expresslrs_rf_pref_params_s *const RFperf = get_elrs_RFperfParams(index);
     // Binding always uses invertIQ
@@ -365,12 +377,49 @@ static void SetRFLinkRate(uint8_t index) // Set speed of RF link
   rfModeLastChangedMS = millis();
 }
 
+static __attribute__((section(".xip_text"), noinline, noclone))
+expresslrs_tlm_ratio_e ConfiguredTlmRatioForRate(uint8_t rateIndex)
+{
+#if ELRS_HAS_AIRPORT
+  if (UnifiedConfig_IsAirport())
+    return TLM_RATIO_1_2;
+#endif
+#if !ELRS_AIRPORT
+  expresslrs_tlm_ratio_e configured =
+    (expresslrs_tlm_ratio_e)txConfig.GetTlm();
+  if (configured == TLM_RATIO_DISARMED)
+  {
+    const bool armed = (handset.IsArmed != NULL) ? handset.IsArmed() : false;
+    if (armed)
+      return TLM_RATIO_NO_TLM;
+    configured = TLM_RATIO_STD;
+  }
+  return (configured == TLM_RATIO_STD)
+    ? (expresslrs_tlm_ratio_e)get_elrs_airRateConfig(rateIndex)->TLMinterval
+    : configured;
+#else
+  return TLM_RATIO_1_2;
+#endif
+}
+
 static void ChangeRadioParams()
 {
   ModelUpdatePending = false;
   // DBGLN("txConfig.GetRate() = %u", txConfig.GetRate());
+  const bool rateChanged =
+    txConfig.GetRate() != ExpressLRS_currAirRate_Modparams->index;
   SetRFLinkRate(txConfig.GetRate());
-  ExpressLRS_currTlmDenom = TLMratioEnumToValue(ExpressLRS_currAirRate_Modparams->TLMinterval);
+  if (rateChanged)
+  {
+    ExpressLRS_currTlmDenom =
+      TLMratioEnumToValue(ConfiguredTlmRatioForRate(txConfig.GetRate()));
+    // Telemetry received on the old PHY schedule cannot prove that the new
+    // rate is connected. Clear it before UpdateConnectDisconnectStatus().
+    LastTLMpacketRecvMillis = 0;
+    // Acquisition at the new rate needs its own retry deadline. Keeping the
+    // old link's 10-second deadline can strand a missed initial beacon.
+    lastLostMillis = millis() + ExpressLRS_currAirRate_RFperfParams->DisconnectTimeoutMs;
+  }
   txLostSignal = true;
   devicesTriggerEvent();
 }
@@ -534,6 +583,7 @@ static void DownlinkTlmWindowDone(void)
 static void ClearTxPayloadPending(void)
 {
   TxPayloadPending = false;
+  TxPayloadQueuedAtMs = 0;
 }
 
 static void TXdoneISR(void)
@@ -642,7 +692,7 @@ static void GenerateSyncPacketData(OTA_Sync_s * const syncPtr)
   const bool airportMode = UnifiedConfig_IsAirport();
   const uint8_t SwitchEncMode = airportMode ? smWideOr8ch : txConfig.GetSwitchMode();
   const uint8_t Index = airportMode ? ExpressLRS_currAirRate_Modparams->index :
-    ((syncSpamCounter) ? txConfig.GetRate() : ExpressLRS_currAirRate_Modparams->index);
+    ((syncSpamCounter || rateCommitActive) ? txConfig.GetRate() : ExpressLRS_currAirRate_Modparams->index);
 
   if (syncSpamCounter)
     --syncSpamCounter;
@@ -656,7 +706,10 @@ static void GenerateSyncPacketData(OTA_Sync_s * const syncPtr)
 
   SyncPacketLastSent = millis();
 
-  expresslrs_tlm_ratio_e newTlmRatio = UpdateTlmRatioEffective();
+  expresslrs_tlm_ratio_e newTlmRatio =
+    (Index != ExpressLRS_currAirRate_Modparams->index)
+      ? ConfiguredTlmRatioForRate(Index)
+      : UpdateTlmRatioEffective();
 
   syncPtr->fhssIndex = FHSSgetCurrIndex();
   syncPtr->nonce = OtaNonce;
@@ -674,6 +727,21 @@ static void GenerateSyncPacketData(OTA_Sync_s * const syncPtr)
   }
 }
 
+static void GenerateSyncPacket(OTA_Packet_s *packet)
+{
+    GenerateSyncPacketData(OtaIsFullRes ? &packet->full.sync.sync : &packet->std.sync);
+    if (OtaIsFullRes && !UnifiedConfig_IsAirport() && !InBindingMode &&
+        packet->full.sync.sync.rateIndex != ExpressLRS_currAirRate_Modparams->index)
+    {
+        packet->full.sync.rateSwitchPhase = rateCommitActive ? OTA_RATE_COMMIT : OTA_RATE_PREPARE;
+        if (rateCommitActive) {
+            uint32_t now = millis();
+            uint32_t remaining = (int32_t)(rateCommitAtMs - now) > 0 ? rateCommitAtMs - now : 0U;
+            packet->full.sync.rateSwitchDelay = OtaRateCommitTicks(remaining);
+        }
+    }
+}
+
 static void QueueTxPayload(uint8_t *payload)
 {
     if (payload == NULL || TxPayloadPending)
@@ -682,6 +750,7 @@ static void QueueTxPayload(uint8_t *payload)
     if (Tk86xxSendData(payload, ExpressLRS_currAirRate_Modparams->PayloadLength) == API_SUCCESS)
     {
         TxPayloadPending = true;
+        TxPayloadQueuedAtMs = millis();
     }
 }
 
@@ -691,7 +760,16 @@ static void SendRCdataToRF(bool isRcData)
         return;
 
     if (TxPayloadPending)
+    {
+        if ((uint32_t)(millis() - TxPayloadQueuedAtMs) < TX_PAYLOAD_PENDING_RECOVERY_MS)
+            return;
+
+        // A missing TX_DONE must not stop all future RC/SYNC processing.
+        // Reinitialize the PHY so the driver abort callback owns buffer cleanup.
+        txLostSignal = true;
+        devicesTriggerEvent();
         return;
+    }
 
     // Do not send a stale channels packet to the RX if one has not been received from the handset
     // *Do* send data if a packet has never been received from handset and the timer is running
@@ -712,6 +790,15 @@ static void SendRCdataToRF(bool isRcData)
     WORD_ALIGNED_ATTR OTA_Packet_s otaPkt = {0};
     uint8_t *p = NULL;
     static uint32_t syncPacketCount = 0;
+    if (rateCommitActive) {
+        if ((int32_t)(now - rateCommitAtMs) < 0) {
+            otaPkt.std.type = PACKET_TYPE_SYNC;
+            GenerateSyncPacket(&otaPkt);
+            OtaGeneratePacketCrc(&otaPkt);
+            QueueTxPayload((uint8_t *)&otaPkt.full.sync);
+        }
+        return;
+    }
     //   static uint8_t syncSlot;
 
   const bool airportMode = UnifiedConfig_IsAirport();
@@ -726,11 +813,11 @@ static void SendRCdataToRF(bool isRcData)
 
     // DBGLN("skipSync = %u, now = %u, SyncPacketLastSent = %u, SyncInterval = %u", skipSync, now, SyncPacketLastSent, SyncInterval);
     // Sync spam only happens on slot 1 and 2 and can't be disabled
-    if ((syncSpamCounter && (syncPacketCount % 10 == 0) /*|| (syncSpamCounterAfterRateChange && FHSSonSyncChannel())*/) /*&& (NonceFHSSresult == 1 || NonceFHSSresult == 2)*/)
+    if (!InBindingMode && syncSpamCounter && (syncPacketCount % 10 == 0))
     {
         // DBGLN("Sending sync packet");
         otaPkt.std.type = PACKET_TYPE_SYNC;
-        GenerateSyncPacketData(OtaIsFullRes ? &otaPkt.full.sync.sync : &otaPkt.std.sync);
+        GenerateSyncPacket(&otaPkt);
         OtaGeneratePacketCrc(&otaPkt);
         p = (uint8_t *)&otaPkt.full.sync;
         QueueTxPayload(p);
@@ -744,7 +831,7 @@ static void SendRCdataToRF(bool isRcData)
         #if !SENSI_TEST
         // DBGLN("Sending sync packet periodically");
         otaPkt.std.type = PACKET_TYPE_SYNC;
-        GenerateSyncPacketData(OtaIsFullRes ? &otaPkt.full.sync.sync : &otaPkt.std.sync);
+        GenerateSyncPacket(&otaPkt);
         OtaGeneratePacketCrc(&otaPkt);
         p = (uint8_t *)&otaPkt.full.sync;
         // syncSlot = (syncSlot + 1) % (ExpressLRS_currAirRate_Modparams->FHSShopInterval * 2);
@@ -804,6 +891,7 @@ static void ModelUpdateReq(void)
   // Force synspam with the current rate parameters in case already have a connection established
   if (txConfig.SetModelId(txConfig.m_modelId))
   {
+    rateCommitActive = false;
     syncSpamCounter = syncSpamAmount;
     syncSpamCounterAfterRateChange = syncSpamAmountAfterRateChange;
     ModelUpdatePending = true;
@@ -1059,10 +1147,27 @@ static void CheckConfigChangePending()
 {
   if (txConfig.IsModified() || ModelUpdatePending)
   {
-    // DBGLN("tx modified :%d", syncSpamCounter);
-    // Keep transmitting sync packets until the spam counter runs out
-    if (syncSpamCounter > 0)
+    if (InBindingMode)
       return;
+
+    // DBGLN("tx modified :%d", syncSpamCounter);
+    // Finish sending the announced SYNC before applying the new rate.
+    if (syncSpamCounter > 0 || TxPayloadPending)
+      return;
+
+    if (OtaIsFullRes && !UnifiedConfig_IsAirport() &&
+        txConfig.GetRate() != ExpressLRS_currAirRate_Modparams->index) {
+      if (!rateCommitActive) {
+        rateCommitActive = true;
+        rateCommitAtMs = millis() + OTA_RATE_COMMIT_WINDOW_MS;
+        return;
+      }
+      // The receiver must finish reinitializing before the TX emits the new
+      // rate's initial beacon. A late last old-rate packet can delay its timer.
+      if ((int32_t)(millis() - (rateCommitAtMs + OTA_RATE_TX_GUARD_MS)) < 0)
+        return;
+    }
+    rateCommitActive = false;
 
 #if !defined(PLATFORM_STM32) || defined(TARGET_USE_EEPROM)
     // while (busyTransmitting); // wait until no longer transmitting

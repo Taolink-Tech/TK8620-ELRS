@@ -129,7 +129,9 @@ static void initialize()
         #endif
     }
     initCfg.rf_pwr = (TxPower)POWERMGNT_getPowerIndBm();
-    Tk86xxCloseRadio();
+    // Tk86xxInit() already stops an active PHY before reinitializing it. Avoid
+    // the extra full RF power-down here; immediate power-up after CloseRadio()
+    // can leave the radio transition stalled until the watchdog resets the RX.
     if ((ret = Tk86xxInit(&initCfg)) == API_SUCCESS) {
         SlotCfg slotCfg = {0};
         slotCfg.slotType  = SLOT_BCN;
@@ -237,6 +239,11 @@ static int event()
 
     if (s_pendingAirRateChange) {
         s_pendingAirRateChange = false;
+        // initialize() applies the current telemetry slot layout as well as the
+        // rate. Consume a coalesced ratio event to avoid a second PHY restart.
+        doingBinding = InBindingMode;
+        txPowerChanged = false;
+        tlmChanged = false;
         initialize();
         start();
         return DURATION_IMMEDIATELY;
@@ -246,10 +253,14 @@ static int event()
         initialize();
         start();
         doingBinding = true;
+        txPowerChanged = false;
+        tlmChanged = false;
     } else if (doingBinding) {
         doingBinding = false;
         initialize();
         start();
+        txPowerChanged = false;
+        tlmChanged = false;
     }
 
     if (txPowerChanged) {

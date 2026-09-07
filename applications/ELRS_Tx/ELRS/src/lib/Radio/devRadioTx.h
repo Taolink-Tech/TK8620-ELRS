@@ -12,6 +12,4 @@ void DevRadioTx_RegisterTxAbortCb(void (*cb)(void));
 void DevRadioTx_RegisterTlmWindowDoneCb(void (*cb)(void));
 void DevRadioTx_Stop(void);
 
-// Trigger a coordinated TX/RX packet-rate switch (air rate) via MSP uplink and then restart the radio.
-void DevRadioTx_RequestAirRateChange(uint8_t newRateIndex);
 void DevRadioTx_RequestTlmRatioChange(uint8_t previousTlmDenom);
